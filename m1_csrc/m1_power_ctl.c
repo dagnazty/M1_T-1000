@@ -286,39 +286,6 @@ static void battery_info_gui_update(uint8_t param)
     u8g2_FirstPage(&m1_u8g2); // This call required for page drawing in mode 1
     do
     {
-        u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
-
-        for(int i = 0; i < 4; ++i) {
-        	int x = i * 32 + 1;
-        	u8g2_DrawFrame(&m1_u8g2, x, 45, 30, 18);
-        }
-
-        u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
-        for(int i = 0; i < 4; ++i) {
-        	int x = i * 32 + 1+6;
-        	u8g2_DrawBox(&m1_u8g2, x, 41, 18, 8);
-        }
-
-        u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-
-        // 16 x 6
-        m1_draw_text(&m1_u8g2, 7, 47,18, res_string(IDS_L), TEXT_ALIGN_CENTER);
-        sprintf(stat_msg, "%u%%", SystemPowerStatus.battery_level);
-        m1_draw_text(&m1_u8g2, 1, 60, 30, stat_msg, TEXT_ALIGN_CENTER);
-
-        m1_draw_text(&m1_u8g2, 39, 47,18, res_string(IDS_T), TEXT_ALIGN_CENTER);
-		sprintf(stat_msg, "%uC", SystemPowerStatus.battery_temp);
-		m1_draw_text(&m1_u8g2, 33, 60, 30, stat_msg, TEXT_ALIGN_CENTER);
-
-	    m1_draw_text(&m1_u8g2, 71, 47,18, res_string(IDS_V), TEXT_ALIGN_CENTER);
-        m1_float_to_string(stat_msg, battery_voltage, 1);
-        strcat(stat_msg, "V");
-        m1_draw_text(&m1_u8g2, 65, 60, 30, stat_msg, TEXT_ALIGN_CENTER);
-
-        m1_draw_text(&m1_u8g2, 103, 47,18, res_string(IDS_H), TEXT_ALIGN_CENTER);
-        sprintf(stat_msg, "%u%%", SystemPowerStatus.battery_health);
-        m1_draw_text(&m1_u8g2, 97, 60, 30, stat_msg, TEXT_ALIGN_CENTER);
-
         int str_id = IDS_USER_DEFINED;
 		if (SystemPowerStatus.fault==0) {
 			if (SystemPowerStatus.stat==0) {
@@ -337,19 +304,57 @@ static void battery_info_gui_update(uint8_t param)
 		} else if (SystemPowerStatus.fault==3) {
 			str_id = IDS_SAFETY_TIME_EXP;
 		}
+        sprintf(stat_msg, "%u%%", SystemPowerStatus.battery_level);
+
+        m1_draw_header_bar(&m1_u8g2, "Battery", stat_msg);
+        m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 19);
+
+        u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
 		if(str_id < IDS_USER_DEFINED)
-			m1_draw_text(&m1_u8g2, 2, 7,120, res_string(str_id), TEXT_ALIGN_LEFT);
+			m1_draw_text(&m1_u8g2, 8, 25, 114, res_string(str_id), TEXT_ALIGN_LEFT);
 
         if (SystemPowerStatus.stat==0) {
         	sprintf(stat_msg, "%dmA", SystemPowerStatus.consumption_current);
-        	m1_draw_text(&m1_u8g2, 2, 17,120, stat_msg, TEXT_ALIGN_LEFT);
+        	m1_draw_text(&m1_u8g2, 8, 34, 114, stat_msg, TEXT_ALIGN_LEFT);
         } else {
 			m1_float_to_string(stat_msg, SystemPowerStatus.charge_voltage, 1);
 			strcat(stat_msg, "V ");
 			sprintf(stat_msg2, "%umA", SystemPowerStatus.charge_current);
 			strcat(stat_msg, stat_msg2);
-			m1_draw_text(&m1_u8g2, 2, 17,120, stat_msg, TEXT_ALIGN_LEFT);
+			m1_draw_text(&m1_u8g2, 8, 34, 114, stat_msg, TEXT_ALIGN_LEFT);
 		}
+
+        u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
+        for(int i = 0; i < 4; ++i) {
+        	int x = i * 32 + 1;
+        	u8g2_DrawFrame(&m1_u8g2, x, 45, 30, 18);
+        }
+
+        u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
+        for(int i = 0; i < 4; ++i) {
+        	int x = i * 32 + 7;
+        	u8g2_DrawBox(&m1_u8g2, x, 41, 18, 8);
+        }
+
+        u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+
+        m1_draw_text(&m1_u8g2, 7, 47,18, res_string(IDS_L), TEXT_ALIGN_CENTER);
+        sprintf(stat_msg, "%u%%", SystemPowerStatus.battery_level);
+        m1_draw_text(&m1_u8g2, 1, 60, 30, stat_msg, TEXT_ALIGN_CENTER);
+
+        m1_draw_text(&m1_u8g2, 39, 47,18, res_string(IDS_T), TEXT_ALIGN_CENTER);
+		sprintf(stat_msg, "%uC", SystemPowerStatus.battery_temp);
+		m1_draw_text(&m1_u8g2, 33, 60, 30, stat_msg, TEXT_ALIGN_CENTER);
+
+	    m1_draw_text(&m1_u8g2, 71, 47,18, res_string(IDS_V), TEXT_ALIGN_CENTER);
+        m1_float_to_string(stat_msg, battery_voltage, 1);
+        strcat(stat_msg, "V");
+        m1_draw_text(&m1_u8g2, 65, 60, 30, stat_msg, TEXT_ALIGN_CENTER);
+
+        m1_draw_text(&m1_u8g2, 103, 47,18, res_string(IDS_H), TEXT_ALIGN_CENTER);
+        sprintf(stat_msg, "%u%%", SystemPowerStatus.battery_health);
+        m1_draw_text(&m1_u8g2, 97, 60, 30, stat_msg, TEXT_ALIGN_CENTER);
+        m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Live", arrowright_8x8);
     } while (u8g2_NextPage(&m1_u8g2));
 }
 
@@ -475,7 +480,9 @@ static void power_reboot_gui_update(uint8_t param)
 	/* Graphic work starts here */
 	u8g2_FirstPage(&m1_u8g2);
 	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-	u8g2_DrawXBMP(&m1_u8g2, 23, 1, 82, 36, m1_device_82x36);
+	m1_draw_header_bar(&m1_u8g2, "Power", "Reboot");
+	m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+	u8g2_DrawXBMP(&m1_u8g2, 23, 16, 82, 36, m1_device_82x36);
 	u8g2_SetFont(&m1_u8g2, M1_DISP_RUN_WARNING_FONT_1B);
 	m1_draw_text(&m1_u8g2, 2, 49, 124, res_string(IDS_REBOOT), TEXT_ALIGN_CENTER);
 	//u8g2_DrawStr(&m1_u8g2, 35, 49, "REBOOT");
@@ -596,7 +603,9 @@ static void power_shutdown_gui_update(uint8_t param)
 	/* Graphic work starts here */
 	u8g2_FirstPage(&m1_u8g2);
 	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-	u8g2_DrawXBMP(&m1_u8g2, 23, 1, 82, 36, m1_device_82x36);
+	m1_draw_header_bar(&m1_u8g2, "Power", "Off");
+	m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+	u8g2_DrawXBMP(&m1_u8g2, 23, 16, 82, 36, m1_device_82x36);
 	u8g2_SetFont(&m1_u8g2, M1_DISP_RUN_WARNING_FONT_1B);
 	m1_draw_text(&m1_u8g2, 2, 49, 124, res_string(IDS_POWER_OFF), TEXT_ALIGN_CENTER);
 

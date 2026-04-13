@@ -68,6 +68,9 @@ void settings_system(void);
 void settings_about(void);
 static void settings_about_display_choice(uint8_t choice);
 static void settings_apply_orientation(uint8_t orient);
+static const char *settings_lcd_item_label(uint8_t item);
+static const char *settings_lcd_item_value(uint8_t item);
+static void settings_lcd_draw(uint8_t sel);
 void settings_save_to_sd(void);
 
 /*************** F U N C T I O N   I M P L E M E N T A T I O N ****************/
@@ -104,6 +107,77 @@ static void settings_apply_orientation(uint8_t orient)
         u8g2_SetDisplayRotation(&m1_u8g2, U8G2_R2);
 }
 
+static const char *settings_lcd_item_label(uint8_t item)
+{
+    switch (item)
+    {
+        case LCD_SET_BRIGHTNESS: return "Brightness";
+        case LCD_SET_BUZZER:     return "Buzzer";
+        case LCD_SET_LED:        return "LED Notify";
+        case LCD_SET_ORIENT:     return "Orientation";
+        case LCD_SET_SLEEP:      return "Sleep After";
+        default:                 return "";
+    }
+}
+
+static const char *settings_lcd_item_value(uint8_t item)
+{
+    switch (item)
+    {
+        case LCD_SET_BRIGHTNESS: return s_brightness_text[m1_brightness_level];
+        case LCD_SET_BUZZER:     return m1_buzzer_on ? "On" : "Off";
+        case LCD_SET_LED:        return m1_led_notify_on ? "On" : "Off";
+        case LCD_SET_ORIENT:     return s_orient_text[m1_screen_orientation];
+        case LCD_SET_SLEEP:      return s_sleep_text[m1_sleep_timeout_idx];
+        default:                 return "";
+    }
+}
+
+static void settings_lcd_draw(uint8_t sel)
+{
+    char badge[12];
+    uint8_t visible_start = 0;
+
+    if (sel > 1 && LCD_SETTINGS_ITEMS > 3)
+        visible_start = (sel - 1 > LCD_SETTINGS_ITEMS - 3) ? LCD_SETTINGS_ITEMS - 3 : sel - 1;
+
+    snprintf(badge, sizeof(badge), "%u/%u", (unsigned)(sel + 1), (unsigned)LCD_SETTINGS_ITEMS);
+
+    m1_u8g2_firstpage();
+    u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+    m1_draw_header_bar(&m1_u8g2, "Settings", badge);
+    m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+    u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
+
+    for (uint8_t vi = 0; vi < 3 && (visible_start + vi) < LCD_SETTINGS_ITEMS; vi++)
+    {
+        uint8_t item = visible_start + vi;
+        uint8_t y = 24 + vi * 10;
+        const char *label = settings_lcd_item_label(item);
+        const char *value = settings_lcd_item_value(item);
+
+        if (item == sel)
+        {
+            u8g2_DrawBox(&m1_u8g2, 6, y - 7, 114, 9);
+            u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
+            u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_B);
+            m1_draw_text(&m1_u8g2, 10, y, 64, label, TEXT_ALIGN_LEFT);
+            m1_draw_text(&m1_u8g2, 78, y, 38, value, TEXT_ALIGN_RIGHT);
+            u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+            u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
+        }
+        else
+        {
+            u8g2_DrawFrame(&m1_u8g2, 6, y - 7, 114, 9);
+            m1_draw_text(&m1_u8g2, 10, y, 64, label, TEXT_ALIGN_LEFT);
+            m1_draw_text(&m1_u8g2, 78, y, 38, value, TEXT_ALIGN_RIGHT);
+        }
+    }
+
+    m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Change", arrowright_8x8);
+    m1_u8g2_nextpage();
+}
+
 
 /*============================================================================*/
 /**
@@ -125,74 +199,7 @@ void settings_lcd_and_notifications(void)
         if (needs_redraw)
         {
             needs_redraw = 0;
-            char line[32];
-
-            m1_u8g2_firstpage();
-            u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-            u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-            m1_draw_text(&m1_u8g2, 2, 10, 124, "LCD & Notifications", TEXT_ALIGN_CENTER);
-
-            u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
-
-            /* Scrollable window: show 3 items at a time */
-            uint8_t visible_start = 0;
-            if (sel > 1 && LCD_SETTINGS_ITEMS > 3)
-                visible_start = (sel - 1 > LCD_SETTINGS_ITEMS - 3) ? LCD_SETTINGS_ITEMS - 3 : sel - 1;
-
-            for (uint8_t vi = 0; vi < 3 && (visible_start + vi) < LCD_SETTINGS_ITEMS; vi++)
-            {
-                uint8_t i = visible_start + vi;
-                uint8_t y = 24 + vi * 12;
-                const char *label = "";
-                const char *value = "";
-
-                switch (i)
-                {
-                case LCD_SET_BRIGHTNESS:
-                    label = "Brightness";
-                    value = s_brightness_text[m1_brightness_level];
-                    break;
-                case LCD_SET_BUZZER:
-                    label = "Buzzer";
-                    value = m1_buzzer_on ? "On" : "Off";
-                    break;
-                case LCD_SET_LED:
-                    label = "LED Notify";
-                    value = m1_led_notify_on ? "On" : "Off";
-                    break;
-                case LCD_SET_ORIENT:
-                    label = "Orientation";
-                    value = s_orient_text[m1_screen_orientation];
-                    break;
-                case LCD_SET_SLEEP:
-                    label = "Sleep After";
-                    value = s_sleep_text[m1_sleep_timeout_idx];
-                    break;
-                }
-
-                if (i == sel)
-                {
-                    u8g2_DrawBox(&m1_u8g2, 0, y - 9, 128, 11);
-                    u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
-                    u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_B);
-                    snprintf(line, sizeof(line), "< %s: %s >", label, value);
-                    u8g2_DrawStr(&m1_u8g2, 4, y, line);
-                    u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-                    u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
-                }
-                else
-                {
-                    snprintf(line, sizeof(line), "  %s: %s", label, value);
-                    u8g2_DrawStr(&m1_u8g2, 4, y, line);
-                }
-            }
-
-            /* Bottom bar */
-            u8g2_DrawBox(&m1_u8g2, 0, 52, 128, 12);
-            u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
-            u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-            u8g2_DrawStr(&m1_u8g2, 2, 61, "U/D=Sel L/R=Change");
-            m1_u8g2_nextpage();
+            settings_lcd_draw(sel);
         }
 
         ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
@@ -304,21 +311,15 @@ void settings_power(void)
 /*============================================================================*/
 static void settings_system_draw(void)
 {
+    char detail[32];
+
+    snprintf(detail, sizeof(detail), "ESP32 at boot: %s", m1_esp32_auto_init ? "ON" : "OFF");
     m1_u8g2_firstpage();
-    u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-    u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-
-    m1_draw_text(&m1_u8g2, 2, 10, 124, "System Settings", TEXT_ALIGN_CENTER);
-
-    u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
-    m1_draw_text(&m1_u8g2, 4, 28, 72, "ESP32 at boot:", TEXT_ALIGN_LEFT);
-
-    u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_B);
-    m1_draw_text(&m1_u8g2, 78, 28, 46, m1_esp32_auto_init ? "ON" : "OFF", TEXT_ALIGN_LEFT);
-
-    u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-    m1_draw_text(&m1_u8g2, 4, 42, 120, "Init WiFi/BT on boot", TEXT_ALIGN_CENTER);
-
+    m1_draw_status_panel(&m1_u8g2, "Settings", "System",
+                      NULL, 0, 0,
+                      detail,
+                      "Controls WiFi/BT auto init",
+                      "Toggle with OK or LEFT/RIGHT");
     m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Toggle", arrowright_8x8);
     m1_u8g2_nextpage();
 }
@@ -375,18 +376,6 @@ void settings_about(void)
 	S_M1_Main_Q_t q_item;
 	BaseType_t ret;
 	uint8_t choice;
-
-	/* Graphic work starts here */
-	u8g2_FirstPage(&m1_u8g2);
-	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-	u8g2_DrawBox(&m1_u8g2, 0, 52, 128, 12); // Draw an inverted bar at the bottom to display options
-	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // Write text in inverted color
-	u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-	u8g2_DrawXBMP(&m1_u8g2, 1, 53, 8, 8, arrowleft_8x8); // draw arrowleft icon
-	u8g2_DrawStr(&m1_u8g2, 11, 61, "Prev.");
-	u8g2_DrawXBMP(&m1_u8g2, 119, 53, 8, 8, arrowright_8x8); // draw arrowright icon
-	u8g2_DrawStr(&m1_u8g2, 97, 61, "Next");
-	m1_u8g2_nextpage(); // Update display RAM
 
 	choice = 0;
 	settings_about_display_choice(choice);
@@ -446,35 +435,41 @@ void settings_about(void)
 /*============================================================================*/
 static void settings_about_display_choice(uint8_t choice)
 {
-	uint8_t prn_name[20];
+	char badge[8];
+	char prn_name[24];
 
-	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // Set background color
-	u8g2_DrawBox(&m1_u8g2, 0, 0, M1_LCD_DISPLAY_WIDTH, ABOUT_BOX_Y_POS_ROW_5 + 1); // Clear old content
-	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT); // Set text color
+	snprintf(badge, sizeof(badge), "%u/%u", (unsigned)(choice + 1), (unsigned)(SETTING_ABOUT_CHOICES_MAX + 1));
+
+	m1_u8g2_firstpage();
+	m1_draw_header_bar(&m1_u8g2, "Settings", badge);
+	m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
 
 	switch (choice)
 	{
 		case 0: // FW info
-			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_B); // Set bold font
-			u8g2_DrawStr(&m1_u8g2, 0, ABOUT_BOX_Y_POS_ROW_1, M1_PRODUCT_NAME);
-			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N); // Set normal font
-			u8g2_DrawStr(&m1_u8g2, 0, ABOUT_BOX_Y_POS_ROW_2, T1000_VERSION_STRING);
+			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_B);
+			m1_draw_text(&m1_u8g2, 8, 24, 114, M1_PRODUCT_NAME, TEXT_ALIGN_LEFT);
+			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
+			m1_draw_text(&m1_u8g2, 8, 33, 114, T1000_VERSION_STRING, TEXT_ALIGN_LEFT);
 			sprintf(prn_name, "Active bank: %d", (m1_device_stat.active_bank==BANK1_ACTIVE)?1:2);
-			u8g2_DrawStr(&m1_u8g2, 0, ABOUT_BOX_Y_POS_ROW_3, prn_name);
-			u8g2_DrawStr(&m1_u8g2, 0, ABOUT_BOX_Y_POS_ROW_4, T1000_COMPAT_VERSION_STRING);
+			m1_draw_text(&m1_u8g2, 8, 42, 114, prn_name, TEXT_ALIGN_LEFT);
+			m1_draw_text(&m1_u8g2, 8, 51, 114, T1000_COMPAT_VERSION_STRING, TEXT_ALIGN_LEFT);
 			break;
 
 		case 1: // Company info
-			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N); // Set small font
-			u8g2_DrawStr(&m1_u8g2, 0, ABOUT_BOX_Y_POS_ROW_1, "MonstaTek Inc.");
-			u8g2_DrawStr(&m1_u8g2, 0, ABOUT_BOX_Y_POS_ROW_2, "San Jose, CA, USA");
+			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_B);
+			m1_draw_text(&m1_u8g2, 8, 24, 114, "MonstaTek Inc.", TEXT_ALIGN_LEFT);
+			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
+			m1_draw_text(&m1_u8g2, 8, 34, 114, "San Jose, CA, USA", TEXT_ALIGN_LEFT);
+			m1_draw_text(&m1_u8g2, 8, 44, 114, "Base firmware lineage", TEXT_ALIGN_LEFT);
 			break;
 
 		default:
-			u8g2_DrawXBMP(&m1_u8g2, 23, 1, 82, 36, m1_device_82x36);
+			u8g2_DrawXBMP(&m1_u8g2, 23, 16, 82, 36, m1_device_82x36);
 			break;
 	} // switch (choice)
 
+	m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Prev", "Next", arrowright_8x8);
 	m1_u8g2_nextpage(); // Update display RAM
 } // static void settings_about_display_choice(uint8_t choice)
 

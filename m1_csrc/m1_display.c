@@ -13,6 +13,7 @@
 /*************************** I N C L U D E S **********************************/
 
 #include <stdint.h>
+#include <stdio.h>
 //#include "stm32h5xx_hal.h"
 //#include "main.h"
 #include "m1_lp5814.h"
@@ -30,8 +31,28 @@
 #define MENU_M1_SCR_ANI_TIMEOUT		1000 // animation timeout in millisecond
 
 #define MENU_SCROLLBAR_POS_X				124
-#define MENU_SCROLLBAR_POS_Y				0
+#define MENU_SCROLLBAR_POS_Y				12
 #define MENU_SCROLLBAR_WIDTH				4
+
+#define MENU_HEADER_HEIGHT                  11
+#define MENU_SCROLLBAR_TRACK_Y              (MENU_HEADER_HEIGHT + 2)
+#define MENU_SCROLLBAR_TRACK_H              50
+
+#define MENU_MAIN_PANEL_X                   0
+#define MENU_MAIN_PANEL_Y                   13
+#define MENU_MAIN_PANEL_W                   42
+#define MENU_MAIN_PANEL_H                   49
+
+#define MENU_MAIN_ROW_X                     45
+#define MENU_MAIN_ROW_W                     76
+#define MENU_MAIN_ROW_H                     13
+#define MENU_MAIN_ROW_TEXT_X                67
+#define MENU_MAIN_ROW_ICON_X                50
+
+#define MENU_SUB_ROW_X                      2
+#define MENU_SUB_ROW_W                      120
+#define MENU_SUB_ROW_H                      12
+#define MENU_SUB_ROW_TEXT_X                 8
 
 #define MAIN_MENU_TEXT_ITEMS				4
 #define MAIN_MENU_TEXT_FRAME_TOP_POS_Y		0
@@ -79,13 +100,6 @@ const uint8_t *menu_m1_logo_array[MENU_M1_LOGO_ARRAY_LEN] = {
 };
 
 static const uint8_t menu_window_sizes[] = {MAIN_MENU_TEXT_ITEMS, SUB_MENU_TEXT_ITEMS};
-static const uint8_t menu_text_frame_top_pos_y[] = {MAIN_MENU_TEXT_FRAME_TOP_POS_Y, SUB_MENU_TEXT_FRAME_TOP_POS_Y};
-static const uint8_t menu_text_left_pos_x[] = {MAIN_MENU_TXT_LEFT_POS_X, SUB_MENU_TXT_LEFT_POS_X};
-static const uint8_t menu_text_top_pos_y[] = {MAIN_MENU_TXT_TOP_POS_Y, SUB_MENU_TEXT_TOP_POS_Y};
-static const uint8_t menu_text_spacing_vert[] = {MAIN_MENU_TXT_SPACING_VERT, SUB_MENU_TEXT_SPACING_VERT};
-static const uint8_t menu_text_frame_h[] = {MAIN_MENU_TEXT_FRAME_H, SUB_MENU_TEXT_FRAME_H};
-static const uint8_t menu_text_frame_w[] = {MAIN_MENU_TEXT_FRAME_W, SUB_MENU_TEXT_FRAME_W};
-static const uint8_t menu_text_frame_left_pos_x[] = {MAIN_MENU_TEXT_FRAME_LEFT_POS_X, SUB_MENU_TEXT_FRAME_LEFT_POS_X};
 static const uint8_t *menu_text_font_n[] = {M1_DISP_MAIN_MENU_FONT_N, M1_DISP_SUB_MENU_FONT_N};
 static const uint8_t *menu_text_font_b[] = {M1_DISP_MAIN_MENU_FONT_B, M1_DISP_SUB_MENU_FONT_B};
 
@@ -132,6 +146,8 @@ void m1_draw_text_box(u8g2_t *u8g2,
                     int line_height,        // 줄 간격(px)
                     const char *text,
                     S_M1_text_align_t align);
+static void m1_gui_draw_menu_header(const char *title, uint8_t sel_item, uint8_t num_items);
+static void m1_gui_draw_main_menu_panel(void);
 
 /*************** F U N C T I O N   I M P L E M E N T A T I O N ****************/
 
@@ -238,9 +254,12 @@ uint8_t m1_gui_submenu_update(const char *phmenu[], uint8_t num_items, uint8_t s
 {
 	static S_M1_Disp_Window_t x_menu_display[SUB_MENU_LEVEL_MAX];
 	static uint8_t x_menu_level = 0, x_menu_update_init = 0;
-	uint8_t menu_text_y, menu_frame_y;
 	uint8_t disp_window_bottom_row;
 	uint8_t n_items, active_item, run;
+	uint8_t row_box_x, row_box_w, row_h, row_text_x;
+	uint8_t row_box_y, row_text_y;
+	uint8_t scroll_handle_h, scroll_handle_y;
+	const char *header_title;
 
 	n_items = num_items;
 
@@ -251,7 +270,7 @@ uint8_t m1_gui_submenu_update(const char *phmenu[], uint8_t num_items, uint8_t s
 			sel_item++;
 			if ( sel_item >= n_items )
 				sel_item = 0;
-			// No break here!
+			/* fall through */
 
 		case MENU_UPDATE_MOVE_DOWN: // moving down
 			if ( n_items > menu_window_sizes[menu_level_id] )
@@ -297,7 +316,7 @@ uint8_t m1_gui_submenu_update(const char *phmenu[], uint8_t num_items, uint8_t s
 				sel_item--;
 			else
 				sel_item = n_items - 1;
-			// No break here!
+			/* fall through */
 
 		case MENU_UPDATE_MOVE_UP: // moving up
 			if ( n_items >= menu_window_sizes[menu_level_id] )
@@ -411,67 +430,73 @@ uint8_t m1_gui_submenu_update(const char *phmenu[], uint8_t num_items, uint8_t s
 		disp_window_bottom_row = disp_window_top_row + (n_items - 1); // partial window display
 	active_item = disp_window_top_row;
 	active_item += disp_window_active_row - 1;
-	menu_frame_y = menu_text_frame_top_pos_y[menu_level_id];
-	menu_text_y = menu_text_top_pos_y[menu_level_id];
+
+	header_title = (menu_level_id == 0) ? M1_PRODUCT_MARK : this_gui_menu->title;
+	m1_gui_draw_menu_header(header_title, sel_item, n_items);
+
+	if (menu_level_id == 0)
+	{
+		row_box_x = MENU_MAIN_ROW_X;
+		row_box_w = MENU_MAIN_ROW_W;
+		row_h = MENU_MAIN_ROW_H;
+		row_text_x = MENU_MAIN_ROW_TEXT_X;
+		m1_gui_draw_main_menu_panel();
+	}
+	else
+	{
+		row_box_x = MENU_SUB_ROW_X;
+		row_box_w = MENU_SUB_ROW_W;
+		row_h = MENU_SUB_ROW_H;
+		row_text_x = MENU_SUB_ROW_TEXT_X;
+	}
 
 	u8g2_SetFont(&m1_u8g2, menu_text_font_n[menu_level_id]);
 	for (run=disp_window_top_row; run<=disp_window_bottom_row; run++)
 	{
+		row_box_y = MENU_HEADER_HEIGHT + 1 + ((run - disp_window_top_row) * row_h);
+		row_text_y = row_box_y + ((menu_level_id == 0) ? 10 : 9);
+
 		if ( run==active_item )
 		{
-			if ( menu_level_id==0 )
-			{
-		   		// Draw frame for selected menu item
-				u8g2_DrawXBMP(&m1_u8g2, menu_text_frame_left_pos_x[menu_level_id], menu_frame_y, menu_text_frame_w[menu_level_id], menu_text_frame_h[menu_level_id], m1_frame_75x16);
-			} // if ( menu_level_id==0 )
-			else
-			{
-				u8g2_DrawBox(&m1_u8g2, menu_text_frame_left_pos_x[menu_level_id], menu_frame_y, menu_text_frame_w[menu_level_id], menu_text_frame_h[menu_level_id]);
-				u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // set the color to White
-			} // else
+			u8g2_DrawBox(&m1_u8g2, row_box_x, row_box_y, row_box_w, row_h);
+			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
 			u8g2_SetFont(&m1_u8g2, menu_text_font_b[menu_level_id]);
-    		u8g2_DrawStr(&m1_u8g2, menu_text_left_pos_x[menu_level_id], menu_text_y, phmenu[run - 1]);
-    		u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT); // return the color to Black
-    		u8g2_SetFont(&m1_u8g2, menu_text_font_n[menu_level_id]);
-		} // if ( run==active_item )
+		}
 		else
 		{
-			u8g2_DrawStr(&m1_u8g2, menu_text_left_pos_x[menu_level_id], menu_text_y, phmenu[run - 1]);
-		} // else
+			u8g2_DrawFrame(&m1_u8g2, row_box_x, row_box_y, row_box_w, row_h);
+			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+			u8g2_SetFont(&m1_u8g2, menu_text_font_n[menu_level_id]);
+		} // if ( run==active_item )
+
 		if ( menu_level_id==0 )
 		{
-			// Draw icons for main menu items
-			u8g2_DrawXBMP(&m1_u8g2, MAIN_MENU_ICON_LEFT_POS_X, menu_frame_y + 1, MAIN_MENU_ICON_WIDTH, MAIN_MENU_ICON_HEIGHT, this_gui_menu->submenu[run - 1]->icon_ptr);
+			if (this_gui_menu->submenu[run - 1]->icon_ptr != NULL)
+			{
+				u8g2_DrawXBMP(&m1_u8g2, MENU_MAIN_ROW_ICON_X, row_box_y + 1,
+				              MAIN_MENU_ICON_WIDTH, MAIN_MENU_ICON_HEIGHT,
+				              this_gui_menu->submenu[run - 1]->icon_ptr);
+			}
 		}
-		menu_frame_y += menu_text_frame_h[menu_level_id];
-		menu_text_y += menu_text_spacing_vert[menu_level_id];
+
+		u8g2_DrawStr(&m1_u8g2, row_text_x, row_text_y, phmenu[run - 1]);
+		u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
 	} // for (run=disp_window_top_row; run<=disp_window_bottom_row; run++)
 
-	if ( menu_level_id==0 )
-	{
-		// Draw logo for main menu
-		u8g2_DrawXBMP(&m1_u8g2, MAIN_MENU_LOGO_LEFT_POS_X, MAIN_MENU_LOGO_TOP_POS_Y, MAIN_MENU_LOGO_WIDTH, MAIN_MENU_LOGO_HEIGHT, m1_logo_26x14);
-		u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-		m1_draw_text(&m1_u8g2, 0, MAIN_MENU_LOGO_TOP_POS_Y + MAIN_MENU_LOGO_HEIGHT + 9,
-		             MAIN_MENU_TEXT_FRAME_LEFT_POS_X - 2, M1_PRODUCT_MARK, TEXT_ALIGN_CENTER);
-
-		// Draw SD card status indicator in top-left corner
-		if (m1_sdcard_get_status() == SD_access_OK)
-		{
-			u8g2_DrawXBMP(&m1_u8g2, 1, 1, 10, 10, sd_card_10x10);
-		}
-		else
-		{
-			// Draw a small "no SD" indicator: empty outline + slash
-			u8g2_SetFont(&m1_u8g2, u8g2_font_micro_tr);
-			u8g2_DrawStr(&m1_u8g2, 0, 9, "noSD");
-		}
-	} // if ( menu_level_id==0 )
-
 	// Draw the scroll bar
-	u8g2_DrawXBMP(&m1_u8g2, MENU_SCROLLBAR_POS_X, MENU_SCROLLBAR_POS_Y, MENU_SCROLLBAR_WIDTH, M1_LCD_DISPLAY_HEIGHT, menu_scroll_bar_4x64);
-	// Draw the scroll bar handle
-	u8g2_DrawBox(&m1_u8g2, MENU_SCROLLBAR_POS_X, (M1_LCD_DISPLAY_HEIGHT*sel_item)/num_items, MENU_SCROLLBAR_WIDTH, M1_LCD_DISPLAY_HEIGHT/num_items);
+	u8g2_DrawFrame(&m1_u8g2, MENU_SCROLLBAR_POS_X, MENU_SCROLLBAR_TRACK_Y, MENU_SCROLLBAR_WIDTH, MENU_SCROLLBAR_TRACK_H);
+	if (num_items > 0)
+	{
+		scroll_handle_h = MENU_SCROLLBAR_TRACK_H / num_items;
+		if (scroll_handle_h < 6)
+			scroll_handle_h = 6;
+
+		scroll_handle_y = MENU_SCROLLBAR_TRACK_Y + ((MENU_SCROLLBAR_TRACK_H * sel_item) / num_items);
+		if ((scroll_handle_y + scroll_handle_h) > (MENU_SCROLLBAR_TRACK_Y + MENU_SCROLLBAR_TRACK_H - 1))
+			scroll_handle_y = MENU_SCROLLBAR_TRACK_Y + MENU_SCROLLBAR_TRACK_H - scroll_handle_h - 1;
+
+		u8g2_DrawBox(&m1_u8g2, MENU_SCROLLBAR_POS_X + 1, scroll_handle_y, MENU_SCROLLBAR_WIDTH - 2, scroll_handle_h);
+	}
 
 	u8g2_NextPage(&m1_u8g2); // Update display RAM
 
@@ -485,6 +510,35 @@ uint8_t m1_gui_submenu_update(const char *phmenu[], uint8_t num_items, uint8_t s
 
 	return 0;
 } // uint8_t m1_gui_submenu_update(const char *phmenu[], uint8_t num_items, uint8_t sel_item, uint8_t direction)
+
+static void m1_gui_draw_menu_header(const char *title, uint8_t sel_item, uint8_t num_items)
+{
+	char header_status[12];
+
+	u8g2_DrawBox(&m1_u8g2, 0, 0, M1_LCD_DISPLAY_WIDTH, MENU_HEADER_HEIGHT - 1);
+	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
+	u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+	m1_draw_text(&m1_u8g2, 3, 8, 86, title, TEXT_ALIGN_LEFT);
+	snprintf(header_status, sizeof(header_status), "%u/%u", (unsigned)(sel_item + 1), (unsigned)num_items);
+	m1_draw_text(&m1_u8g2, 88, 8, 36, header_status, TEXT_ALIGN_RIGHT);
+
+	if (m1_sdcard_get_status() == SD_access_OK)
+	{
+		u8g2_DrawXBMP(&m1_u8g2, 116, 1, 10, 10, sd_card_10x10);
+	}
+
+	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+	u8g2_DrawHLine(&m1_u8g2, 0, MENU_HEADER_HEIGHT - 1, M1_LCD_DISPLAY_WIDTH);
+}
+
+static void m1_gui_draw_main_menu_panel(void)
+{
+	u8g2_DrawFrame(&m1_u8g2, MENU_MAIN_PANEL_X, MENU_MAIN_PANEL_Y, MENU_MAIN_PANEL_W, MENU_MAIN_PANEL_H);
+	u8g2_DrawXBMP(&m1_u8g2, 1, 18, 40, 32, m1_logo_40x32);
+	u8g2_DrawHLine(&m1_u8g2, 6, 52, 30);
+	u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+	m1_draw_text(&m1_u8g2, 0, 60, MENU_MAIN_PANEL_W, M1_PRODUCT_MARK, TEXT_ALIGN_CENTER);
+}
 
 
 
@@ -720,14 +774,115 @@ uint8_t m1_message_box_choice(u8g2_t *u8g2, const char *title1, const char *titl
 /*============================================================================*/
 void m1_draw_bottom_bar(u8g2_t *u8g2, const uint8_t *lbitmap, const char *ltext, const char *rtext, const uint8_t *rbitmap)
 {
-	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-	u8g2_DrawBox(&m1_u8g2, 0, 52, 128, 12); // Draw an inverted bar at the bottom to display options
+	u8g2_SetDrawColor(u8g2, M1_DISP_DRAW_COLOR_TXT);
+	u8g2_DrawHLine(u8g2, 0, 51, 128);
+	u8g2_DrawBox(u8g2, 0, 52, 128, 12);
 
-	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // Write text in inverted color
-	u8g2_DrawXBMP(&m1_u8g2, 1, 54, 8, 8, lbitmap); // draw arrowleft icon
-	m1_draw_text(&m1_u8g2, 11, 61, 50,ltext, TEXT_ALIGN_LEFT);
-	u8g2_DrawXBMP(&m1_u8g2, 119, 54, 8, 8, rbitmap); // draw arrowright icon
-	m1_draw_text(&m1_u8g2, 67, 61, 50,rtext, TEXT_ALIGN_RIGHT);
+	u8g2_SetDrawColor(u8g2, M1_DISP_DRAW_COLOR_BG);
+	u8g2_DrawVLine(u8g2, 63, 54, 8);
+	if (lbitmap != NULL)
+		u8g2_DrawXBMP(u8g2, 2, 54, 8, 8, lbitmap);
+	if (rbitmap != NULL)
+		u8g2_DrawXBMP(u8g2, 118, 54, 8, 8, rbitmap);
+
+	m1_draw_text(u8g2, 12, 61, 46, ltext, TEXT_ALIGN_LEFT);
+	m1_draw_text(u8g2, 68, 61, 46, rtext, TEXT_ALIGN_RIGHT);
+	u8g2_SetDrawColor(u8g2, M1_DISP_DRAW_COLOR_TXT);
+}
+
+/*============================================================================*/
+/**
+  * @brief Draw the shared top header used by runtime screens
+  * @param u8g2 Display handle
+  * @param title Left-aligned title text
+  * @param badge Optional right-aligned badge/status text
+  * @retval None
+  */
+/*============================================================================*/
+void m1_draw_header_bar(u8g2_t *u8g2, const char *title, const char *badge)
+{
+	u8g2_SetDrawColor(u8g2, M1_DISP_DRAW_COLOR_TXT);
+	u8g2_DrawBox(u8g2, 0, 0, 128, 11);
+	u8g2_SetDrawColor(u8g2, M1_DISP_DRAW_COLOR_BG);
+	u8g2_SetFont(u8g2, M1_DISP_FUNC_MENU_FONT_N);
+	m1_draw_text(u8g2, 3, 8, badge ? 88 : 120, title ? title : M1_PRODUCT_MARK, TEXT_ALIGN_LEFT);
+	if (badge != NULL)
+	{
+		m1_draw_text(u8g2, 92, 8, 32, badge, TEXT_ALIGN_RIGHT);
+	}
+	u8g2_SetDrawColor(u8g2, M1_DISP_DRAW_COLOR_TXT);
+	u8g2_DrawHLine(u8g2, 0, 11, 128);
+}
+
+/*============================================================================*/
+/**
+  * @brief Draw a shared content frame for detail/status screens
+  * @param u8g2 Display handle
+  * @param x Left position
+  * @param y Top position
+  * @param w Frame width
+  * @param h Frame height
+  * @retval None
+  */
+/*============================================================================*/
+void m1_draw_content_frame(u8g2_t *u8g2, u8g2_uint_t x, u8g2_uint_t y, u8g2_uint_t w, u8g2_uint_t h)
+{
+	u8g2_DrawFrame(u8g2, x, y, w, h);
+	if (w > 4 && h > 4)
+	{
+		u8g2_DrawFrame(u8g2, x + 1, y + 1, w - 2, h - 2);
+	}
+}
+
+/*============================================================================*/
+/**
+  * @brief Draw a shared framed status panel with optional icon
+  * @param u8g2 Display handle
+  * @param title Header title
+  * @param badge Optional header badge
+  * @param icon Optional bitmap
+  * @param icon_w Bitmap width
+  * @param icon_h Bitmap height
+  * @param line1 First body line
+  * @param line2 Second body line
+  * @param line3 Third body line
+  * @retval None
+  */
+/*============================================================================*/
+void m1_draw_status_panel(u8g2_t *u8g2,
+				 const char *title,
+				 const char *badge,
+				 const uint8_t *icon,
+				 u8g2_uint_t icon_w,
+				 u8g2_uint_t icon_h,
+				 const char *line1,
+				 const char *line2,
+				 const char *line3)
+{
+	int text_x = 8;
+	int text_w = 114;
+	int icon_x = 7;
+	int icon_y = 16;
+
+	m1_draw_header_bar(u8g2, title, badge);
+	m1_draw_content_frame(u8g2, 2, 14, 124, 35);
+
+	if (icon != NULL)
+	{
+		if (icon_h < 30)
+			icon_y = 16 + (30 - icon_h) / 2;
+		u8g2_DrawXBMP(u8g2, icon_x, icon_y, icon_w, icon_h, icon);
+		text_x = icon_x + icon_w + 6;
+		text_w = 122 - text_x;
+	}
+
+	u8g2_SetFont(u8g2, M1_DISP_FUNC_MENU_FONT_N);
+	if (line1 != NULL)
+		m1_draw_text(u8g2, text_x, 25, text_w, line1, TEXT_ALIGN_LEFT);
+	if (line2 != NULL)
+		m1_draw_text(u8g2, text_x, 34, text_w, line2, TEXT_ALIGN_LEFT);
+	if (line3 != NULL)
+		m1_draw_text(u8g2, text_x, 43, text_w, line3, TEXT_ALIGN_LEFT);
 }
 
 /*============================================================================*/

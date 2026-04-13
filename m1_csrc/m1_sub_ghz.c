@@ -921,112 +921,57 @@ static void subghz_record_gui_destroy(uint8_t param)
 /*============================================================================*/
 static void subghz_record_gui_update(uint8_t param)
 {
+	char line1[40] = {0};
+	char line2[40] = {0};
+	char line3[40] = {0};
+	char cfg_line[32];
+	uint8_t next_param = param;
+
 	switch (param)
 	{
 		case SUBGHZ_RECORD_DISPLAY_PARAM_READY:
 		{
-			/* Graphic work starts here */
-			char cfg_line[32];
-		    u8g2_FirstPage(&m1_u8g2); // This call required for page drawing in mode 1
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-			u8g2_DrawBox(&m1_u8g2, 70, 0, 58, 10);
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // set the color to White
-			u8g2_SetFont(&m1_u8g2, M1_DISP_RUN_MENU_FONT_B);
-			u8g2_DrawXBMP(&m1_u8g2, 70, 1, 8, 8, arrowleft_8x8);
-			u8g2_DrawXBMP(&m1_u8g2, 120, 1, 8, 8, arrowright_8x8);
-			u8g2_DrawStr(&m1_u8g2, 82, 8, "Change");
-
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-			u8g2_DrawBox(&m1_u8g2, 0, 52, 128, 12); // Draw an inverted bar at the bottom to display options
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // Write text in inverted color
-			u8g2_DrawXBMP(&m1_u8g2, 2, 53, 8, 8, arrowdown_8x8);
-			u8g2_DrawStr(&m1_u8g2, 12, 61, "Config");
-			u8g2_DrawXBMP(&m1_u8g2, 74, 52, 10, 10, target_10x10); // draw TARGET icon
-			u8g2_DrawStr(&m1_u8g2, 86, 61, "Record");
-
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-			/* Show frequency + modulation from config presets */
 			snprintf(cfg_line, sizeof(cfg_line), "%s %s",
 			         subghz_freq_presets[subghz_cfg.freq_idx].label,
 			         subghz_mod_presets[subghz_cfg.mod_idx].label);
-			u8g2_DrawStr(&m1_u8g2, 55, 18, cfg_line);
-
-			u8g2_DrawXBMP(&m1_u8g2, 0, 5, 50, 27, subghz_antenna_50x27);
+			strcpy(line1, cfg_line);
+			strcpy(line2, "OK record  DOWN config");
+			strcpy(line3, "LEFT/RIGHT band  UP custom");
 			break;
 		}
 
 		case SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE:
 		{
-			char status_str[40];
-
-			// Clear the CHANGE option at the top right
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
-			u8g2_DrawBox(&m1_u8g2, 65, 0, 63, 10); // Clear existing content
-
-			// Clear middle area for fresh content
-			u8g2_DrawBox(&m1_u8g2, 0, 18, 128, 32);
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
-
 			/* Show decoded protocol info if available */
 			if (subghz_record_has_decoded)
 			{
-				u8g2_DrawStr(&m1_u8g2, 2, 28, protocol_text[subghz_record_last_decoded.protocol]);
-				snprintf(status_str, sizeof(status_str), "0x%lX %dbit",
+				strncpy(line1, protocol_text[subghz_record_last_decoded.protocol], sizeof(line1) - 1);
+				snprintf(line2, sizeof(line2), "0x%lX %dbit",
 				         (uint32_t)subghz_record_last_decoded.key,
 				         subghz_record_last_decoded.bit_len);
-				u8g2_DrawStr(&m1_u8g2, 2, 38, status_str);
-				snprintf(status_str, sizeof(status_str), "%ddBm TE:%d",
+				snprintf(line3, sizeof(line3), "%ddBm TE:%d",
 				         subghz_record_last_decoded.rssi,
 				         subghz_record_last_decoded.te);
-				u8g2_DrawStr(&m1_u8g2, 2, 48, status_str);
 			}
 			else
 			{
-				u8g2_DrawStr(&m1_u8g2, 2, 34, "Recording...");
+				strcpy(line1, "Recording...");
+				strcpy(line2, "Waiting for signal");
+				strcpy(line3, "BACK or OK stops");
 			}
-
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-			u8g2_DrawBox(&m1_u8g2, 0, 52, 128, 12); // Draw an inverted bar at the bottom to display options
-
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // Write text in inverted color
-			u8g2_DrawXBMP(&m1_u8g2, 84, 52, 10, 10, target_10x10); // draw TARGET icon
-			u8g2_DrawStr(&m1_u8g2, 96, 61, "Stop ");
 			break;
 		}
 
 		case SUBGHZ_RECORD_DISPLAY_PARAM_COMPLETE:
-			/* Clear middle area — remove stale "Recording..." text */
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
-			u8g2_DrawBox(&m1_u8g2, 0, 18, 128, 32);
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
-			u8g2_DrawStr(&m1_u8g2, 2, 34, "Recording complete");
-
-			u8g2_DrawBox(&m1_u8g2, 0, 52, 128, 12);
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
-			u8g2_DrawXBMP(&m1_u8g2, 84, 52, 10, 10, target_10x10);
-			u8g2_DrawStr(&m1_u8g2, 96, 61, "Play ");
-
-			u8g2_DrawXBMP(&m1_u8g2, 1, 53, 8, 8, arrowleft_8x8);
-			u8g2_DrawStr(&m1_u8g2, 11, 61, "Reset");
-
-			u8g2_DrawXBMP(&m1_u8g2, 48, 53, 8, 8, arrowdown_8x8);
-			u8g2_DrawStr(&m1_u8g2, 58, 61, "Save");
+			strcpy(line1, "Recording complete");
+			strcpy(line2, "DOWN save to SD");
+			strcpy(line3, "OK replay  LEFT reset");
 			break;
 
 		case SUBGHZ_RECORD_DISPLAY_PARAM_PLAY:
-			/* Clear middle area */
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
-			u8g2_DrawBox(&m1_u8g2, 0, 18, 128, 32);
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
-			u8g2_DrawStr(&m1_u8g2, 2, 34, "Transmitting...");
-
-			u8g2_DrawBox(&m1_u8g2, 0, 52, 128, 12);
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
-			u8g2_DrawXBMP(&m1_u8g2, 2, 52, 10, 10, target_10x10);
-			u8g2_DrawStr(&m1_u8g2, 14, 61, "Press OK to replay");
+			strcpy(line1, "Replay armed");
+			strcpy(line2, "OK transmits again");
+			strcpy(line3, "BACK keeps sample");
 			break;
 
 		case SUBGHZ_RECORD_DISPLAY_PARAM_SAVE:
@@ -1036,42 +981,55 @@ static void subghz_record_gui_update(uint8_t param)
 			break;
 
 		case SUBGHZ_RECORD_DISPLAY_PARAM_MEM_ERROR:
-			/* Graphic work starts here */
-		    u8g2_FirstPage(&m1_u8g2); // This call required for page drawing in mode 1
-			// Display error message on screen
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-			u8g2_DrawBox(&m1_u8g2, 0, 52, 128, 12); // Draw an inverted bar at the bottom to display options
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // Write text in inverted color
-			u8g2_DrawXBMP(&m1_u8g2, 2, 52, 10, 10, error_10x10); // draw ERROR icon
-			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
-			u8g2_DrawStr(&m1_u8g2, 14, 61, "Memory error! BACK to exit");
+			strcpy(line1, "Memory error!");
+			strcpy(line2, "BACK to exit");
 			break;
 
 		case SUBGHZ_RECORD_DISPLAY_PARAM_SDCARD_ERROR:
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-			u8g2_DrawBox(&m1_u8g2, 0, 52, 128, 12); // Draw an inverted bar at the bottom to display options
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // Write text in inverted color
-			u8g2_DrawStr(&m1_u8g2, 2, 61, "SD card access error!");
-			param = subghz_uiview_gui_latest_param; // Do not update this parameter
+			strcpy(line1, "SD card access");
+			strcpy(line2, "error!");
+			strcpy(line3, "Check card and retry");
+			next_param = subghz_uiview_gui_latest_param; // Do not update this parameter
 			break;
 
 		case SUBGHZ_RECORD_DISPLAY_PARAM_SYS_ERROR:
-			// Display error message on screen
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-			u8g2_DrawBox(&m1_u8g2, 0, 52, 128, 12); // Draw an inverted bar at the bottom to display options
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // Write text in inverted color
-			u8g2_DrawXBMP(&m1_u8g2, 2, 54, 10, 10, error_10x10); // draw ERROR icon
-			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
-			u8g2_DrawStr(&m1_u8g2, 14, 61, "Error! BACK to exit");
+			strcpy(line1, "Error!");
+			strcpy(line2, "BACK to exit");
 			break;
 
 		default:
 			break;
 	} // switch (param)
 
+	m1_u8g2_firstpage();
+	m1_draw_status_panel(&m1_u8g2, "Sub-GHz", "Record",
+					  subghz_antenna_50x27, 50, 27,
+					  line1[0] ? line1 : NULL,
+					  line2[0] ? line2 : NULL,
+					  line3[0] ? line3 : NULL);
+	if (param == SUBGHZ_RECORD_DISPLAY_PARAM_READY)
+	{
+		m1_draw_bottom_bar(&m1_u8g2, arrowdown_8x8, "Config", "Record", target_10x10);
+	}
+	else if (param == SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE)
+	{
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Stop", target_10x10);
+	}
+	else if (param == SUBGHZ_RECORD_DISPLAY_PARAM_COMPLETE)
+	{
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Reset", "Play", target_10x10);
+	}
+	else if (param == SUBGHZ_RECORD_DISPLAY_PARAM_PLAY)
+	{
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Replay", target_10x10);
+	}
+	else
+	{
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "", NULL);
+	}
 	m1_u8g2_nextpage(); // Update display RAM
 
-	subghz_uiview_gui_latest_param = param; // Update new param
+	subghz_uiview_gui_latest_param = next_param; // Update new param
 } // static void subghz_record_gui_update(uint8_t param)
 
 
@@ -1605,45 +1563,53 @@ static void subghz_replay_play_gui_destroy(uint8_t param)
 /*============================================================================*/
 static void subghz_replay_play_gui_update(uint8_t param)
 {
-	uint8_t freq_text[20];
+	char freq_text[24] = {0};
+	char line1[32] = {0};
+	char line2[32] = {0};
+	char line3[32] = {0};
 
 	switch (param)
 	{
 		case SUBGHZ_REPLAY_DISPLAY_PARAM_ACTIVE:
-			// This call required for page drawing in mode 1
-			m1_u8g2_firstpage();
-			u8g2_SetFont(&m1_u8g2, M1_DISP_RUN_MENU_FONT_B);
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
 			m1_float_to_string(freq_text, subghz_replay_freq, 3);
 			strcat(freq_text, "MHz ");
 			strcat(freq_text, subghz_modulation_text[subghz_replay_mod]);
-			u8g2_DrawStr(&m1_u8g2, 40, 10, freq_text);
-
-			u8g2_DrawXBMP(&m1_u8g2, 0, 5, 50, 27, subghz_antenna_50x27);
+			strcpy(line1, freq_text);
+			strcpy(line2, "Preparing replay");
 			break;
 
 		case SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY:
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-			u8g2_DrawBox(&m1_u8g2, 0, 52, 128, 12); // Draw an inverted bar at the bottom to display options
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // Write text in inverted color
-			u8g2_DrawXBMP(&m1_u8g2, 2, 52, 10, 10, target_10x10); // draw TARGET icon
-			u8g2_DrawStr(&m1_u8g2, 14, 61, "Press OK to replay");
+			m1_float_to_string(freq_text, subghz_replay_freq, 3);
+			strcat(freq_text, "MHz ");
+			strcat(freq_text, subghz_modulation_text[subghz_replay_mod]);
+			strcpy(line1, freq_text);
+			strcpy(line2, "Replay ready");
+			strcpy(line3, "OK transmit  BACK return");
 			break;
 
 		case SUBGHZ_REPLAY_DISPLAY_PARAM_SYS_ERROR:
-			// Display error message on screen
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-			u8g2_DrawBox(&m1_u8g2, 0, 52, 128, 12); // Draw an inverted bar at the bottom to display options
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // Write text in inverted color
-			u8g2_DrawXBMP(&m1_u8g2, 2, 52, 10, 10, error_10x10); // draw ERROR icon
-			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
-			u8g2_DrawStr(&m1_u8g2, 14, 61, "File error! BACK to return");
+			strcpy(line1, "File error!");
+			strcpy(line2, "BACK to return");
 			break;
 
 		default:
 			break;
 	} // switch (param)
 
+	m1_u8g2_firstpage();
+	m1_draw_status_panel(&m1_u8g2, "Sub-GHz", "Replay",
+					  subghz_antenna_50x27, 50, 27,
+					  line1[0] ? line1 : NULL,
+					  line2[0] ? line2 : NULL,
+					  line3[0] ? line3 : NULL);
+	if (param == SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY)
+	{
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Replay", target_10x10);
+	}
+	else
+	{
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "", NULL);
+	}
 	m1_u8g2_nextpage(); // Update display RAM
     subghz_uiview_gui_latest_param = param; // Update new param
 } // static void subghz_replay_play_gui_update(uint8_t param)

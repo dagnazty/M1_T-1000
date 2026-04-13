@@ -114,6 +114,16 @@ bool NFC_SetRole(NfcRole_e role);
 bool NFC_SwitchRole(NfcRole_e role);
 
 /**
+ * @brief nfc_worker_reset_state - Reset worker state before task startup
+ *
+ * Restores the default poller role and wait state so the NFC worker starts
+ * from a clean baseline after entering the NFC menu.
+ *
+ * @retval None
+ */
+void nfc_worker_reset_state(void);
+
+/**
  * @brief nfc_run_ctx_init - Initialize NFC context
  * 
  * @param[in] c Pointer to NFC context structure

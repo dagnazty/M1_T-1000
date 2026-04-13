@@ -657,45 +657,44 @@ void setting_esp32_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
 {
 	uint8_t i, n_items;
 	uint8_t menu_text_y;
-	bool trunc;
 	uint8_t prn_name[GUI_DISP_LINE_LEN_MAX + 1] = {0};
 	uint16_t msg_len, msg_id;
 	uint8_t *pboot_info;
+	char line1[32] = {0};
 
 	n_items = phmenu->num_submenu_items;
-	menu_text_y = THIS_LCD_MENU_TEXT_FIRST_ROW_Y;
+	menu_text_y = 18;
 
 	/* Graphic work starts here */
 	m1_u8g2_firstpage(); // This call required for page drawing in mode 1
     do
     {
+    	m1_draw_header_bar(&m1_u8g2, "Settings", "ESP32");
+    	m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 37);
     	for (i=0; i<n_items; i++)
     	{
     		if ( i==sel_item )
     		{
-    			// Draw box for selected menu item with text color
-    			u8g2_DrawBox(&m1_u8g2, 0, menu_text_y - THIS_LCD_MENU_TEXT_ROW_SPACE + 2, M1_LCD_SUB_MENU_TEXT_FRAME_W, THIS_LCD_MENU_TEXT_ROW_SPACE);
+    			u8g2_DrawBox(&m1_u8g2, 6, menu_text_y - 7, 114, 9);
     			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // set to background color
     			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_B);
-    			u8g2_DrawStr(&m1_u8g2, 4, menu_text_y, phmenu->submenu[i]->title);
+    			u8g2_DrawStr(&m1_u8g2, 10, menu_text_y, phmenu->submenu[i]->title);
     			if ( i==1 ) // Index of the Start Address field
     			{
     		    	// Draw arrows left and right
-    		    	u8g2_DrawXBMP(&m1_u8g2, M1_LCD_DISPLAY_WIDTH - 40, THIS_LCD_MENU_TEXT_FIRST_ROW_Y + 2, 10, 10, arrowleft_10x10);
-    		    	u8g2_DrawXBMP(&m1_u8g2, M1_LCD_DISPLAY_WIDTH - 20, THIS_LCD_MENU_TEXT_FIRST_ROW_Y + 2, 10, 10, arrowright_10x10);
+    		    	u8g2_DrawXBMP(&m1_u8g2, 98, menu_text_y - 7, 10, 10, arrowleft_10x10);
+    		    	u8g2_DrawXBMP(&m1_u8g2, 110, menu_text_y - 7, 10, 10, arrowright_10x10);
     			}
     			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT); // return to text color
     			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N); // return to default font
     		}
     		else
     		{
-    			u8g2_DrawStr(&m1_u8g2, 4, menu_text_y, phmenu->submenu[i]->title);
+    			u8g2_DrawFrame(&m1_u8g2, 6, menu_text_y - 7, 114, 9);
+    			u8g2_DrawStr(&m1_u8g2, 10, menu_text_y, phmenu->submenu[i]->title);
     		}
-    		menu_text_y += THIS_LCD_MENU_TEXT_ROW_SPACE;
+    		menu_text_y += 8;
     	} // for (i=0; i<n_items; i++)
-
-    	// Draw info box at the bottom
-    	m1_info_box_display_init(true);
 
     	switch ( sel_item )
     	{
@@ -717,28 +716,28 @@ void setting_esp32_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
     			switch ( esp32_update_status )
     			{
     				case M1_FW_UPDATE_READY:
-    					m1_info_box_display_draw(INFO_BOX_ROW_1, prn_name);
+    					strncpy(line1, (const char *)prn_name, sizeof(line1) - 1);
     					break;
 
     				case M1_FW_IMAGE_FILE_ACCESS_ERROR:
-    					m1_info_box_display_draw(INFO_BOX_ROW_1, "Image file error!");
+    					strcpy(line1, "Image file error!");
     					break;
 
     				case M1_FW_CRC_FILE_ACCESS_ERROR:
-    					m1_info_box_display_draw(INFO_BOX_ROW_1, "MD5 file error!");
+    					strcpy(line1, "MD5 file error!");
     					break;
 
     				case M1_FW_CRC_FILE_INVALID:
-		    			m1_info_box_display_draw(INFO_BOX_ROW_1, "Invalid MD5 file!");
+		    			strcpy(line1, "Invalid MD5 file!");
 						break;
 
     				case M1_FW_IMAGE_FILE_TYPE_ERROR:
     				case M1_FW_IMAGE_SIZE_INVALID:
-		    			m1_info_box_display_draw(INFO_BOX_ROW_1, "Invalid image file!");
+		    			strcpy(line1, "Invalid image file!");
 		    			break;
 
 		    		case M1_FW_CRC_CHECKSUM_UNMATCHED:
-		    			m1_info_box_display_draw(INFO_BOX_ROW_1, "Checksum failed!");
+		    			strcpy(line1, "Checksum failed!");
 		    			break;
 
     				default:
@@ -747,19 +746,18 @@ void setting_esp32_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
     			break;
 
     		case 1: // Start address
-    	    	sprintf(prn_name, "0x%06lX:", start_address);
-    	    	m1_info_box_display_draw(INFO_BOX_ROW_1, prn_name);
+    	    	snprintf(line1, sizeof(line1), "0x%06lX", start_address);
     			break;
 
     		case 2: // Firmware update
     			switch ( esp32_update_status )
     			{
     				case M1_FW_UPDATE_READY:
-    					m1_info_box_display_draw(INFO_BOX_ROW_1, "Ready to flash!");
+    					strcpy(line1, "Ready to flash!");
     					break;
 
 		    		case M1_FW_UPDATE_SUCCESS:
-		    			m1_info_box_display_draw(INFO_BOX_ROW_1, "Update successfully!");
+		    			strcpy(line1, "Update successful!");
 		    			esp32_update_status = M1_FW_UPDATE_NOT_READY; // Reset after process complete
 		    			i = 0;
 		    			msg_len = m1_ringbuffer_get_read_len(&esp32_rb_hdl);
@@ -773,15 +771,11 @@ void setting_esp32_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
 		    					{
 		    						// Read part of the info message
 		    						strncpy(prn_name, pboot_info + msg_id, msg_len - msg_id);
-		    						m1_info_box_display_draw(INFO_BOX_ROW_2, prn_name);
+		    						strncpy(line1, (const char *)prn_name, sizeof(line1) - 1);
 		    						i++; // Move to next boot message
 		    					} // if ( !i )
 		    					else
 		    					{
-		    						// Read full info message
-		    						msg_len = (msg_len <= GUI_DISP_LINE_LEN_MAX)?msg_len:GUI_DISP_LINE_LEN_MAX;
-		    						strncpy(prn_name, pboot_info, msg_len);
-		    						m1_info_box_display_draw(INFO_BOX_ROW_3, prn_name);
 		    						break; // Having read enough info messages, let break
 		    					} // else
 		    				} // if ( msg_id )
@@ -793,11 +787,11 @@ void setting_esp32_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
 		    			break;
 
 		    		case M1_FW_UPDATE_FAILED:
-		    	    	m1_info_box_display_draw(INFO_BOX_ROW_1, "Update failed!");
+		    	    	strcpy(line1, "Update failed!");
 		    			break;
 
 		    		case M1_FW_UPDATE_LOW_BATTERY:
-		    			m1_info_box_display_draw(INFO_BOX_ROW_1, "Battery level < 50%!");
+		    			strcpy(line1, "Battery level < 50%!");
 		    			break;
 
     				default:
@@ -808,6 +802,8 @@ void setting_esp32_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
     		default: // Unknown selection
     			break;
     	} // switch ( sel_item )
+    	if (line1[0]) m1_draw_text(&m1_u8g2, 8, 49, 114, line1, TEXT_ALIGN_LEFT);
+    	m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Open", arrowright_8x8);
     } while (m1_u8g2_nextpage());
 
 } // void setting_esp32_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
@@ -825,4 +821,3 @@ void setting_esp32_c6_reset(void)
     esp32_enable();
     m1_info_box_display_draw(INFO_BOX_ROW_1, "ESP32-C6 reset done");
 }
-

@@ -52,8 +52,8 @@
 #define BT_DEVICES_FILE				"0:/BT/devices.txt"
 #define BT_MAX_SAVED				20
 
-#define BT_LIST_ITEM_HEIGHT			9
-#define BT_LIST_START_Y				13
+#define BT_LIST_ITEM_HEIGHT			10
+#define BT_LIST_START_Y				14
 #define BT_LIST_VISIBLE				4
 
 
@@ -247,8 +247,7 @@ static bool bt_remove_device(uint8_t index)
 
 static void bt_draw_title_bar(const char *title)
 {
-	u8g2_DrawXBMP(&m1_u8g2, 0, 0, 128, 14, m1_frame_128_14);
-	u8g2_DrawStr(&m1_u8g2, 2, M1_GUI_ROW_SPACING + M1_GUI_FONT_HEIGHT, title);
+	m1_draw_header_bar(&m1_u8g2, title, NULL);
 }
 
 
@@ -259,15 +258,19 @@ static void bt_draw_list_item(uint8_t vis_idx, const char *text, bool selected)
 	if (selected)
 	{
 		u8g2_SetDrawColor(&m1_u8g2, 1);
-		u8g2_DrawBox(&m1_u8g2, 0, y, 128, BT_LIST_ITEM_HEIGHT);
+		u8g2_DrawBox(&m1_u8g2, 2, y, 120, BT_LIST_ITEM_HEIGHT - 1);
 		u8g2_SetDrawColor(&m1_u8g2, 0);
+	}
+	else
+	{
+		u8g2_DrawFrame(&m1_u8g2, 2, y, 120, BT_LIST_ITEM_HEIGHT - 1);
 	}
 
 	/* Truncate text to fit screen (20 chars at 6px font) */
 	char buf[22];
 	strncpy(buf, text, 21);
 	buf[21] = '\0';
-	u8g2_DrawStr(&m1_u8g2, 2, y + 8, buf);
+	u8g2_DrawStr(&m1_u8g2, 8, y + 7, buf);
 
 	if (selected)
 		u8g2_SetDrawColor(&m1_u8g2, 1);
@@ -277,13 +280,7 @@ static void bt_draw_list_item(uint8_t vis_idx, const char *text, bool selected)
 static void bt_show_message(const char *line1, const char *line2, uint16_t delay_ms)
 {
 	m1_u8g2_firstpage();
-	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
-	bt_draw_title_bar("Bluetooth");
-	if (line1)
-		u8g2_DrawStr(&m1_u8g2, 2, 28, line1);
-	if (line2)
-		u8g2_DrawStr(&m1_u8g2, 2, 40, line2);
+	m1_draw_status_panel(&m1_u8g2, "Bluetooth", NULL, NULL, 0, 0, line1, line2, NULL);
 	m1_u8g2_nextpage();
 	if (delay_ms)
 		vTaskDelay(pdMS_TO_TICKS(delay_ms));
@@ -309,8 +306,9 @@ static void bt_scan_detail_screen(ble_scanlist_t *dev)
 			redraw = false;
 			m1_u8g2_firstpage();
 			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-			u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
 			bt_draw_title_bar("Device Info");
+			m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+			u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
 
 			uint8_t y = 24;
 			/* Name */
@@ -319,19 +317,19 @@ static void bt_scan_detail_screen(ble_scanlist_t *dev)
 				char nbuf[22];
 				strncpy(nbuf, (char *)dev->name, 21);
 				nbuf[21] = '\0';
-				u8g2_DrawStr(&m1_u8g2, 2, y, nbuf);
+				m1_draw_text(&m1_u8g2, 8, y, 114, nbuf, TEXT_ALIGN_LEFT);
 			}
 			else
-				u8g2_DrawStr(&m1_u8g2, 2, y, "(No name)");
-			y += 10;
+				m1_draw_text(&m1_u8g2, 8, y, 114, "(No name)", TEXT_ALIGN_LEFT);
+			y += 8;
 
 			/* MAC */
-			u8g2_DrawStr(&m1_u8g2, 2, y, (char *)dev->addr);
-			y += 10;
+			m1_draw_text(&m1_u8g2, 8, y, 114, (char *)dev->addr, TEXT_ALIGN_LEFT);
+			y += 8;
 
 			/* RSSI + addr_type */
 			snprintf(prn_msg, sizeof(prn_msg), "RSSI:%ddBm Type:%u", dev->rssi, dev->addr_type);
-			u8g2_DrawStr(&m1_u8g2, 2, y, prn_msg);
+			m1_draw_text(&m1_u8g2, 8, y, 114, prn_msg, TEXT_ALIGN_LEFT);
 
 			m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Save", arrowright_8x8);
 			m1_u8g2_nextpage();
@@ -382,20 +380,18 @@ void bluetooth_scan(void)
 	if (!get_esp32_main_init_status())
 	{
 		m1_u8g2_firstpage();
-		u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-		bt_draw_title_bar("Bluetooth");
-		u8g2_DrawStr(&m1_u8g2, 6, 28, "Initializing...");
-		u8g2_DrawXBMP(&m1_u8g2, M1_LCD_DISPLAY_WIDTH/2 - 18/2, 32, 18, 32, hourglass_18x32);
+		m1_draw_status_panel(&m1_u8g2, "Bluetooth", "Init",
+						  hourglass_18x32, 18, 32,
+						  "Initializing", "Preparing ESP32-C6", "Please wait...");
 		m1_u8g2_nextpage();
 		esp32_main_init();
 	}
 
 	/* Show scanning animation */
 	m1_u8g2_firstpage();
-	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-	bt_draw_title_bar("Bluetooth");
-	u8g2_DrawStr(&m1_u8g2, 6, 28, "Scanning BLE...");
-	u8g2_DrawXBMP(&m1_u8g2, M1_LCD_DISPLAY_WIDTH/2 - 18/2, 32, 18, 32, hourglass_18x32);
+	m1_draw_status_panel(&m1_u8g2, "Bluetooth", "Scan",
+					  hourglass_18x32, 18, 32,
+					  "Scanning BLE...", "Looking for nearby", "devices");
 	m1_u8g2_nextpage();
 
 	if (get_esp32_main_init_status())
@@ -539,8 +535,9 @@ static void bt_saved_detail_screen(uint8_t dev_idx)
 			redraw = false;
 			m1_u8g2_firstpage();
 			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-			u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
 			bt_draw_title_bar("Saved Device");
+			m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+			u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
 
 			uint8_t y = 24;
 			/* Name */
@@ -549,21 +546,21 @@ static void bt_saved_detail_screen(uint8_t dev_idx)
 				char nbuf[22];
 				strncpy(nbuf, s_saved_devices[dev_idx].name, 21);
 				nbuf[21] = '\0';
-				u8g2_DrawStr(&m1_u8g2, 2, y, nbuf);
+				m1_draw_text(&m1_u8g2, 8, y, 114, nbuf, TEXT_ALIGN_LEFT);
 			}
 			else
-				u8g2_DrawStr(&m1_u8g2, 2, y, "(No name)");
-			y += 10;
+				m1_draw_text(&m1_u8g2, 8, y, 114, "(No name)", TEXT_ALIGN_LEFT);
+			y += 8;
 
 			/* MAC */
-			u8g2_DrawStr(&m1_u8g2, 2, y, s_saved_devices[dev_idx].addr);
-			y += 10;
+			m1_draw_text(&m1_u8g2, 8, y, 114, s_saved_devices[dev_idx].addr, TEXT_ALIGN_LEFT);
+			y += 8;
 
 			/* Options */
 			snprintf(prn_msg, sizeof(prn_msg), "%sConnect  %sDelete",
 				menu_sel == 0 ? ">" : " ",
 				menu_sel == 1 ? ">" : " ");
-			u8g2_DrawStr(&m1_u8g2, 2, y, prn_msg);
+			m1_draw_text(&m1_u8g2, 8, y, 114, prn_msg, TEXT_ALIGN_LEFT);
 
 			m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "OK", arrowright_8x8);
 			m1_u8g2_nextpage();
@@ -798,32 +795,33 @@ void bluetooth_info(void)
 	/* Draw info screen */
 	m1_u8g2_firstpage();
 	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
 	bt_draw_title_bar("BT Info");
+	m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+	u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
 
 	y = 24;
-	u8g2_DrawStr(&m1_u8g2, 2, y, "ESP32 AT FW:");
+	m1_draw_text(&m1_u8g2, 8, y, 114, "ESP32 AT FW:", TEXT_ALIGN_LEFT);
+	y += 8;
+	m1_draw_text(&m1_u8g2, 8, y, 114, version_str, TEXT_ALIGN_LEFT);
 	y += 10;
-	u8g2_DrawStr(&m1_u8g2, 4, y, version_str);
-	y += 12;
 
 	if (s_bt_conn_state.connected)
 	{
-		u8g2_DrawStr(&m1_u8g2, 2, y, "Connected:");
-		y += 10;
+		m1_draw_text(&m1_u8g2, 8, y, 114, "Connected:", TEXT_ALIGN_LEFT);
+		y += 8;
 		if (s_bt_conn_state.name[0])
 		{
 			char nbuf[22];
 			strncpy(nbuf, s_bt_conn_state.name, 21);
 			nbuf[21] = '\0';
-			u8g2_DrawStr(&m1_u8g2, 4, y, nbuf);
+			m1_draw_text(&m1_u8g2, 8, y, 114, nbuf, TEXT_ALIGN_LEFT);
 		}
 		else
-			u8g2_DrawStr(&m1_u8g2, 4, y, s_bt_conn_state.addr);
+			m1_draw_text(&m1_u8g2, 8, y, 114, s_bt_conn_state.addr, TEXT_ALIGN_LEFT);
 	}
 	else
 	{
-		u8g2_DrawStr(&m1_u8g2, 2, y, "Not connected");
+		m1_draw_text(&m1_u8g2, 8, y, 114, "Not connected", TEXT_ALIGN_LEFT);
 	}
 
 	m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "OK", arrowright_8x8);

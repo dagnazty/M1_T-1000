@@ -631,30 +631,19 @@ static uint16_t badusb_count_lines(const char *buf, uint32_t len)
 static void badusb_show_progress(const char *filename)
 {
     char buf[32];
+    char name_buf[24];
 
     m1_u8g2_firstpage();
-    u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-    u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-
-    m1_draw_text(&m1_u8g2, 2, 10, 124, "BadUSB", TEXT_ALIGN_CENTER);
-
-    /* Show filename (truncated) */
-    char name_buf[24];
     strncpy(name_buf, filename, sizeof(name_buf) - 1);
     name_buf[sizeof(name_buf) - 1] = '\0';
-    m1_draw_text(&m1_u8g2, 2, 24, 124, name_buf, TEXT_ALIGN_CENTER);
-
-    /* Progress */
     snprintf(buf, sizeof(buf), "Line %d / %d",
              badusb_state.current_line, badusb_state.total_lines);
-    m1_draw_text(&m1_u8g2, 2, 38, 124, buf, TEXT_ALIGN_CENTER);
-
-    if (badusb_state.running)
-        m1_draw_text(&m1_u8g2, 2, 52, 124, "Running...", TEXT_ALIGN_CENTER);
-    else
-        m1_draw_text(&m1_u8g2, 2, 52, 124, "Done", TEXT_ALIGN_CENTER);
-
-    m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Stop", "OK", arrowright_8x8);
+    m1_draw_status_panel(&m1_u8g2, "BadUSB", "Run",
+                      NULL, 0, 0,
+                      name_buf,
+                      buf,
+                      badusb_state.running ? "Running..." : "Done");
+    m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Stop", "", NULL);
 
     m1_u8g2_nextpage();
 }
@@ -933,10 +922,11 @@ void badusb_run(void)
 
             /* Confirmation screen */
             m1_u8g2_firstpage();
-            u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-            u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-            m1_draw_text(&m1_u8g2, 2, 10, 124, "Run BadUSB?", TEXT_ALIGN_CENTER);
-            m1_draw_text(&m1_u8g2, 2, 28, 124, msg_line, TEXT_ALIGN_CENTER);
+            m1_draw_status_panel(&m1_u8g2, "BadUSB", "Run",
+                              NULL, 0, 0,
+                              "Run selected script?",
+                              msg_line,
+                              "OK launch  BACK cancel");
             m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Run", arrowright_8x8);
             m1_u8g2_nextpage();
 
@@ -999,12 +989,12 @@ void badusb_os_detect(void)
 
     /* Show "connecting" screen */
     m1_u8g2_firstpage();
-    u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-    u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-    m1_draw_text(&m1_u8g2, 2, 14, 124, "OS Detect", TEXT_ALIGN_CENTER);
-    m1_draw_text(&m1_u8g2, 2, 30, 124, "Switching to", TEXT_ALIGN_CENTER);
-    m1_draw_text(&m1_u8g2, 2, 42, 124, "HID mode...", TEXT_ALIGN_CENTER);
-    m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "", arrowright_8x8);
+    m1_draw_status_panel(&m1_u8g2, "BadUSB", "Detect",
+                      NULL, 0, 0,
+                      "Switching to HID",
+                      "Waiting for host",
+                      "BACK cancels");
+    m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "", NULL);
     m1_u8g2_nextpage();
 
     /* Switch USB to HID — this triggers USBD_HID_Init which starts capture */
@@ -1064,14 +1054,12 @@ void badusb_os_detect(void)
     snprintf(detail, sizeof(detail), "Events: %d", g_hid_fingerprint.count);
 
     m1_u8g2_firstpage();
-    u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-    u8g2_SetFont(&m1_u8g2, M1_DISP_RUN_MENU_FONT_B);
-    m1_draw_text(&m1_u8g2, 2, 14, 124, "OS Detected", TEXT_ALIGN_CENTER);
-    u8g2_SetFont(&m1_u8g2, M1_DISP_LARGE_FONT_3B);
-    m1_draw_text(&m1_u8g2, 2, 36, 124, hid_fp_os_name(os), TEXT_ALIGN_CENTER);
-    u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-    m1_draw_text(&m1_u8g2, 2, 50, 124, detail, TEXT_ALIGN_CENTER);
-    m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "", arrowright_8x8);
+    m1_draw_status_panel(&m1_u8g2, "BadUSB", "Detect",
+                      NULL, 0, 0,
+                      "Detected host",
+                      hid_fp_os_name(os),
+                      detail);
+    m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "", NULL);
     m1_u8g2_nextpage();
 
     /* Wait for user to dismiss */
@@ -1106,20 +1094,19 @@ void badusb_os_detect(void)
 static void badusb_draw_list(const char *title, const char *items[],
                              uint8_t count, uint8_t sel)
 {
+    char badge[12];
+    uint8_t y = 24;
+    uint8_t max_visible = 3;
+    uint8_t top = 0;
+
+    snprintf(badge, sizeof(badge), "%u/%u", (unsigned)(sel + 1), (unsigned)count);
+
     m1_u8g2_firstpage();
     u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-
-    /* Title bar */
-    u8g2_SetFont(&m1_u8g2, M1_DISP_RUN_MENU_FONT_B);
-    m1_draw_text(&m1_u8g2, 2, 10, 124, title, TEXT_ALIGN_CENTER);
-
-    /* List items */
+    m1_draw_header_bar(&m1_u8g2, title, badge);
+    m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
     u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-    uint8_t y = 24;
-    uint8_t max_visible = 3;  /* 128x64 display: ~3 items below title */
 
-    /* Compute scroll window */
-    uint8_t top = 0;
     if (sel >= max_visible)
         top = sel - max_visible + 1;
     if (top + max_visible > count)
@@ -1134,17 +1121,19 @@ static void badusb_draw_list(const char *title, const char *items[],
     {
         if (i == sel)
         {
-            /* Draw selection highlight */
-            u8g2_DrawBox(&m1_u8g2, 0, y - 9, 128, 12);
+            u8g2_DrawBox(&m1_u8g2, 6, y - 7, 114, 9);
             u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
-            m1_draw_text(&m1_u8g2, 4, y, 120, items[i], TEXT_ALIGN_LEFT);
+            u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_B);
+            m1_draw_text(&m1_u8g2, 10, y, 108, items[i], TEXT_ALIGN_LEFT);
             u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+            u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
         }
         else
         {
-            m1_draw_text(&m1_u8g2, 4, y, 120, items[i], TEXT_ALIGN_LEFT);
+            u8g2_DrawFrame(&m1_u8g2, 6, y - 7, 114, 9);
+            m1_draw_text(&m1_u8g2, 10, y, 108, items[i], TEXT_ALIGN_LEFT);
         }
-        y += 13;
+        y += 10;
     }
 
     m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "OK", arrowright_8x8);
@@ -1368,16 +1357,24 @@ void badusb_payload_library(void)
 
                     /* Show payload info + confirm */
                     m1_u8g2_firstpage();
-                    u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-                    u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-                    m1_draw_text(&m1_u8g2, 2, 10, 124, "Run Payload?", TEXT_ALIGN_CENTER);
-                    m1_draw_text(&m1_u8g2, 2, 24, 124, pl_names[pl_sel], TEXT_ALIGN_CENTER);
                     if (desc_line[0] != '\0')
                     {
                         char disp_desc[28];
                         strncpy(disp_desc, desc_line, sizeof(disp_desc) - 1);
                         disp_desc[sizeof(disp_desc) - 1] = '\0';
-                        m1_draw_text(&m1_u8g2, 2, 38, 124, disp_desc, TEXT_ALIGN_CENTER);
+                        m1_draw_status_panel(&m1_u8g2, "BadUSB", "Payload",
+                                          NULL, 0, 0,
+                                          pl_names[pl_sel],
+                                          disp_desc,
+                                          "OK run  BACK cancel");
+                    }
+                    else
+                    {
+                        m1_draw_status_panel(&m1_u8g2, "BadUSB", "Payload",
+                                          NULL, 0, 0,
+                                          pl_names[pl_sel],
+                                          "Run selected payload?",
+                                          "OK run  BACK cancel");
                     }
                     m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Run", arrowright_8x8);
                     m1_u8g2_nextpage();

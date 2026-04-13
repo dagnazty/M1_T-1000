@@ -103,8 +103,9 @@ static bool wifi_ensure_esp32_ready(void)
 	if ( !get_esp32_main_init_status() )
 	{
 		m1_u8g2_firstpage();
-		u8g2_DrawStr(&m1_u8g2, 6, 15, "Initializing...");
-		u8g2_DrawXBMP(&m1_u8g2, M1_LCD_DISPLAY_WIDTH/2 - 18/2, M1_LCD_DISPLAY_HEIGHT/2 - 2, 18, 32, hourglass_18x32);
+		m1_draw_status_panel(&m1_u8g2, "WiFi 2.4G", "Init",
+						  hourglass_18x32, 18, 32,
+						  "Initializing", "Preparing ESP32-C6", M1_WIFI_BAND_NOTE);
 		m1_u8g2_nextpage();
 		esp32_main_init();
 	}
@@ -837,36 +838,34 @@ static uint16_t wifi_ap_list_print(ctrl_cmd_t *app_resp, bool up_dir)
 #endif
 
 	m1_u8g2_firstpage();
-	u8g2_DrawXBMP(&m1_u8g2, 0, 0, 128, 14, m1_frame_128_14);
-	u8g2_DrawStr(&m1_u8g2, 2, M1_GUI_ROW_SPACING + M1_GUI_FONT_HEIGHT, "2.4G APs:");
-
-	sprintf(prn_msg, "%d", w_scan_p->count);
-	u8g2_DrawStr(&m1_u8g2, 2 + strlen("2.4G APs: ")*M1_GUI_FONT_WIDTH + 2, M1_GUI_ROW_SPACING + M1_GUI_FONT_HEIGHT, prn_msg);
-
 	sprintf(prn_msg, "%d/%d", i + 1, w_scan_p->count); // Current AP
-	u8g2_DrawStr(&m1_u8g2, M1_LCD_DISPLAY_WIDTH - 6*M1_GUI_FONT_WIDTH, M1_GUI_ROW_SPACING + M1_GUI_FONT_HEIGHT, prn_msg);
+	m1_draw_header_bar(&m1_u8g2, "WiFi Scan", prn_msg);
+	m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+	u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
 
-	y_offset = 14 + M1_GUI_FONT_HEIGHT - 1;
-	// Draw text
+	y_offset = 24;
 	if ( list[i].ssid[0]==0x00 ) // Hidden SSID?
 		strcpy(prn_msg, "*hidden*");
 	else
-		strncpy(prn_msg, (char *)list[i].ssid, M1_LCD_DISPLAY_WIDTH/M1_GUI_FONT_WIDTH);
-	prn_msg[M1_LCD_DISPLAY_WIDTH/M1_GUI_FONT_WIDTH] = '\0';
-	u8g2_DrawStr(&m1_u8g2, 2, y_offset, prn_msg);
-	y_offset += M1_GUI_FONT_HEIGHT;
-	u8g2_DrawStr(&m1_u8g2, 2, y_offset, (char *)list[i].bssid);
-	y_offset += M1_GUI_FONT_HEIGHT + M1_GUI_ROW_SPACING;
-	sprintf(prn_msg, "RSSI: %ddBm", list[i].rssi);
-	u8g2_DrawStr(&m1_u8g2, 2, y_offset, prn_msg);
-	y_offset += M1_GUI_FONT_HEIGHT;
-	snprintf(prn_msg, sizeof(prn_msg), "Ch:%d %s",
-		list[i].channel, wifi_channel_band_to_str(list[i].channel));
-	u8g2_DrawStr(&m1_u8g2, 2, y_offset, prn_msg);
-	y_offset += M1_GUI_FONT_HEIGHT;
+		strncpy(prn_msg, (char *)list[i].ssid, 22);
+	prn_msg[22] = '\0';
+	m1_draw_text(&m1_u8g2, 8, y_offset, 114, prn_msg, TEXT_ALIGN_LEFT);
+	y_offset += 8;
+	m1_draw_text(&m1_u8g2, 8, y_offset, 114, (char *)list[i].bssid, TEXT_ALIGN_LEFT);
+	y_offset += 8;
+	snprintf(prn_msg, sizeof(prn_msg), "RSSI:%ddBm  Ch:%d",
+		list[i].rssi, list[i].channel);
+	m1_draw_text(&m1_u8g2, 8, y_offset, 114, prn_msg, TEXT_ALIGN_LEFT);
+	y_offset += 8;
 	snprintf(prn_msg, sizeof(prn_msg), "Auth: %s",
 		wifi_auth_mode_to_str(list[i].encryption_mode));
-	u8g2_DrawStr(&m1_u8g2, 2, y_offset, prn_msg);
+	m1_draw_text(&m1_u8g2, 8, y_offset, 114, prn_msg, TEXT_ALIGN_LEFT);
+
+#ifdef M1_APP_WIFI_CONNECT_ENABLE
+	m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Connect", arrowright_8x8);
+#else
+	m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "", NULL);
+#endif
 
 	m1_u8g2_nextpage(); // Update display RAM
 
@@ -925,18 +924,9 @@ static void wifi_display_msg(const char *line1, const char *line2)
 /*============================================================================*/
 static void wifi_display_panel(const char *title, const char *line1, const char *line2, const char *line3)
 {
-	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
 	m1_u8g2_firstpage();
-	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-	u8g2_DrawXBMP(&m1_u8g2, 0, 0, 128, 14, m1_frame_128_14);
-	u8g2_DrawStr(&m1_u8g2, 2, M1_GUI_ROW_SPACING + M1_GUI_FONT_HEIGHT, title ? title : "WiFi 2.4G");
-	u8g2_DrawFrame(&m1_u8g2, 2, 16, 124, 34);
-	if ( line1 )
-		u8g2_DrawStr(&m1_u8g2, 6, 26, line1);
-	if ( line2 )
-		u8g2_DrawStr(&m1_u8g2, 6, 36, line2);
-	if ( line3 )
-		u8g2_DrawStr(&m1_u8g2, 6, 46, line3);
+	m1_draw_status_panel(&m1_u8g2, title ? title : "WiFi 2.4G", NULL,
+					  NULL, 0, 0, line1, line2, line3);
 	m1_u8g2_nextpage();
 }
 
@@ -961,10 +951,10 @@ static uint16_t wifi_ap_list_get_index(void)
 /*============================================================================*/
 static void wifi_display_busy(const char *msg)
 {
-	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
 	m1_u8g2_firstpage();
-	u8g2_DrawStr(&m1_u8g2, 6, 15, msg);
-	u8g2_DrawXBMP(&m1_u8g2, M1_LCD_DISPLAY_WIDTH/2 - 18/2, M1_LCD_DISPLAY_HEIGHT/2 - 2, 18, 32, hourglass_18x32);
+	m1_draw_status_panel(&m1_u8g2, "WiFi 2.4G", "Live",
+					  hourglass_18x32, 18, 32,
+					  msg, M1_WIFI_BAND_NOTE, "Please wait...");
 	m1_u8g2_nextpage();
 }
 
@@ -1006,16 +996,21 @@ static bool wifi_do_connect(const char *ssid, const char *password)
 		wifi_get_ip(&ip_req);
 
 		m1_u8g2_firstpage();
-		u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
-		u8g2_DrawStr(&m1_u8g2, 6, 15, "Connected!");
-		u8g2_DrawStr(&m1_u8g2, 6, 15 + M1_GUI_FONT_HEIGHT + 2, ssid);
+		m1_draw_header_bar(&m1_u8g2, "WiFi 2.4G", "Online");
+		m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+		u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+		m1_draw_text(&m1_u8g2, 8, 25, 114, "Connected!", TEXT_ALIGN_LEFT);
+		m1_draw_text(&m1_u8g2, 8, 34, 114, ssid, TEXT_ALIGN_LEFT);
 		if ( ip_req.u.wifi_ap_config.status[0] )
 		{
 			char ip_msg[25];
 			snprintf(ip_msg, sizeof(ip_msg), "IP: %s", ip_req.u.wifi_ap_config.status);
-			u8g2_DrawStr(&m1_u8g2, 6, 15 + 2*(M1_GUI_FONT_HEIGHT + 2), ip_msg);
+			m1_draw_text(&m1_u8g2, 8, 43, 114, ip_msg, TEXT_ALIGN_LEFT);
 		}
-		u8g2_DrawStr(&m1_u8g2, 6, 15 + 3*(M1_GUI_FONT_HEIGHT + 2), M1_WIFI_BAND_NOTE);
+		else
+		{
+			m1_draw_text(&m1_u8g2, 8, 43, 114, M1_WIFI_BAND_NOTE, TEXT_ALIGN_LEFT);
+		}
 		m1_u8g2_nextpage();
 		M1_LOG_I(M1_LOGDB_TAG, "Connected to %s, IP: %s\n\r", ssid, ip_req.u.wifi_ap_config.status);
 		vTaskDelay(pdMS_TO_TICKS(2500));
@@ -1103,27 +1098,27 @@ void wifi_saved_networks(void)
 	while (1)
 	{
 		m1_u8g2_firstpage();
-		u8g2_DrawXBMP(&m1_u8g2, 0, 0, 128, 14, m1_frame_128_14);
-		u8g2_DrawStr(&m1_u8g2, 2, M1_GUI_ROW_SPACING + M1_GUI_FONT_HEIGHT, "Saved Networks");
-
 		sprintf(prn_msg, "%d/%d", sel_idx + 1, cred_count);
-		u8g2_DrawStr(&m1_u8g2, M1_LCD_DISPLAY_WIDTH - 6*M1_GUI_FONT_WIDTH,
-			M1_GUI_ROW_SPACING + M1_GUI_FONT_HEIGHT, prn_msg);
+		m1_draw_header_bar(&m1_u8g2, "Saved WiFi", prn_msg);
+		m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+		u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
 
-		y_offset = 14 + M1_GUI_FONT_HEIGHT;
+		y_offset = 24;
 
 		/* Show selected network SSID */
 		strncpy(prn_msg, creds[sel_idx].ssid, 20);
 		prn_msg[20] = '\0';
-		u8g2_DrawStr(&m1_u8g2, 2, y_offset, prn_msg);
-		y_offset += M1_GUI_FONT_HEIGHT + 2;
+		m1_draw_text(&m1_u8g2, 8, y_offset, 114, prn_msg, TEXT_ALIGN_LEFT);
+		y_offset += 8;
 
 		/* Instructions */
-		u8g2_DrawStr(&m1_u8g2, 2, y_offset, "OK: Connect");
-		y_offset += M1_GUI_FONT_HEIGHT;
-		u8g2_DrawStr(&m1_u8g2, 2, y_offset, M1_WIFI_BAND_NOTE);
-		y_offset += M1_GUI_FONT_HEIGHT;
-		u8g2_DrawStr(&m1_u8g2, 2, y_offset, "RIGHT: Delete");
+		m1_draw_text(&m1_u8g2, 8, y_offset, 114, "OK to connect", TEXT_ALIGN_LEFT);
+		y_offset += 8;
+		m1_draw_text(&m1_u8g2, 8, y_offset, 114, M1_WIFI_BAND_NOTE, TEXT_ALIGN_LEFT);
+		y_offset += 8;
+		m1_draw_text(&m1_u8g2, 8, y_offset, 114, "RIGHT to delete", TEXT_ALIGN_LEFT);
+
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Connect", arrowright_8x8);
 
 		m1_u8g2_nextpage();
 
@@ -1238,47 +1233,46 @@ void wifi_show_status(void)
 
 	/* Display status */
 	m1_u8g2_firstpage();
-	u8g2_DrawXBMP(&m1_u8g2, 0, 0, 128, 14, m1_frame_128_14);
-	u8g2_DrawStr(&m1_u8g2, 2, M1_GUI_ROW_SPACING + M1_GUI_FONT_HEIGHT, "WiFi 2.4G");
+	m1_draw_header_bar(&m1_u8g2, "WiFi Status", s_wifi_connected ? "Live" : "Idle");
+	m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+	u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
 
-	y_offset = 14 + M1_GUI_FONT_HEIGHT;
+	y_offset = 24;
 
 	if ( s_wifi_connected && s_connected_ssid[0] )
 	{
 		strncpy(prn_msg, s_connected_ssid, 20);
 		prn_msg[20] = '\0';
-		u8g2_DrawStr(&m1_u8g2, 2, y_offset, prn_msg);
+		m1_draw_text(&m1_u8g2, 8, y_offset, 114, prn_msg, TEXT_ALIGN_LEFT);
 	}
 	else
 	{
-		u8g2_DrawStr(&m1_u8g2, 2, y_offset, "Not connected");
+		m1_draw_text(&m1_u8g2, 8, y_offset, 114, "Not connected", TEXT_ALIGN_LEFT);
 	}
-	y_offset += M1_GUI_FONT_HEIGHT;
+	y_offset += 8;
 
 	if ( ip_req.u.wifi_ap_config.status[0]
 		&& strcmp(ip_req.u.wifi_ap_config.status, "0.0.0.0") != 0 )
 	{
 		snprintf(prn_msg, sizeof(prn_msg), "IP:%s", ip_req.u.wifi_ap_config.status);
-		u8g2_DrawStr(&m1_u8g2, 2, y_offset, prn_msg);
+		m1_draw_text(&m1_u8g2, 8, y_offset, 114, prn_msg, TEXT_ALIGN_LEFT);
 		s_wifi_connected = true;
 	}
 	else
 	{
-		u8g2_DrawStr(&m1_u8g2, 2, y_offset, "IP: N/A");
+		m1_draw_text(&m1_u8g2, 8, y_offset, 114, "IP: N/A", TEXT_ALIGN_LEFT);
 		s_wifi_connected = false;
 	}
-	y_offset += M1_GUI_FONT_HEIGHT;
+	y_offset += 8;
 
 	if ( ip_req.u.wifi_ap_config.out_mac[0] )
 	{
-		u8g2_DrawStr(&m1_u8g2, 2, y_offset, ip_req.u.wifi_ap_config.out_mac);
+		m1_draw_text(&m1_u8g2, 8, y_offset, 114, ip_req.u.wifi_ap_config.out_mac, TEXT_ALIGN_LEFT);
 	}
-	y_offset += M1_GUI_FONT_HEIGHT;
+	y_offset += 8;
 
-	u8g2_DrawStr(&m1_u8g2, 2, y_offset, M1_WIFI_BAND_NOTE);
-	y_offset += M1_GUI_FONT_HEIGHT;
-
-	u8g2_DrawStr(&m1_u8g2, 2, y_offset, "BACK to exit");
+	m1_draw_text(&m1_u8g2, 8, y_offset, 114, M1_WIFI_BAND_NOTE, TEXT_ALIGN_LEFT);
+	m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "OK", arrowright_8x8);
 	m1_u8g2_nextpage();
 
 	/* Wait for BACK button */

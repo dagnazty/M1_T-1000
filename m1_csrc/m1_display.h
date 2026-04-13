@@ -170,6 +170,17 @@ void m1_info_box_display_draw(uint8_t box_row, const uint8_t *ptext);
 uint8_t m1_message_box(u8g2_t *u8g2, const char *title1, const char *title2, const char *title3, const char *buttons);
 uint8_t m1_message_box_choice(u8g2_t *u8g2, const char *title1, const char *title2, const char *title3, const char *buttons);
 void m1_draw_bottom_bar(u8g2_t *u8g2, const uint8_t *lbitmap, const char *ltext, const char *rtext, const uint8_t *rbitmap);
+void m1_draw_header_bar(u8g2_t *u8g2, const char *title, const char *badge);
+void m1_draw_content_frame(u8g2_t *u8g2, u8g2_uint_t x, u8g2_uint_t y, u8g2_uint_t w, u8g2_uint_t h);
+void m1_draw_status_panel(u8g2_t *u8g2,
+				 const char *title,
+				 const char *badge,
+				 const uint8_t *icon,
+				 u8g2_uint_t icon_w,
+				 u8g2_uint_t icon_h,
+				 const char *line1,
+				 const char *line2,
+				 const char *line3);
 void m1_draw_icon(uint8_t color, u8g2_uint_t x, u8g2_uint_t y, u8g2_uint_t w, u8g2_uint_t h, const uint8_t *bitmap);
 void m1_draw_text(u8g2_t *u8g2,
                  int x, int y,

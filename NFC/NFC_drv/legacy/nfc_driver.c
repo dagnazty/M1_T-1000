@@ -63,6 +63,30 @@ EmuNfcA_t g_emuA = {0};
 TaskHandle_t nfc_worker_task_hdl = NULL;
 QueueHandle_t nfc_worker_q_hdl = NULL;
 
+/*============================================================================*/
+/**
+ * @brief nfc_worker_reset_state - Restore default worker state
+ *
+ * Resets the NFC worker to its idle poller configuration before the task
+ * starts, which avoids inheriting stale role/state across menu re-entry.
+ *
+ * @retval None
+ */
+/*============================================================================*/
+void nfc_worker_reset_state(void)
+{
+    taskENTER_CRITICAL();
+    s_currentRole = NFC_ROLE_POLLER;
+    NfcState = NFC_STATE_WAIT;
+    NfcRole.nfc_init_func = NFC_Polling_Init;
+    NfcRole.nfc_process_func = NFC_Polling_Process;
+    NfcRole.nfc_deinit_func = NFC_Polling_DeInit;
+    NfcRole.tick_ms = 0;
+    taskEXIT_CRITICAL();
+
+    Emu_Clear();
+}
+
 
 /*============================================================================*/
 /**
@@ -283,6 +307,12 @@ void nfc_worker_task(void *arg)
         switch (NfcState)
         {
             case NFC_STATE_WAIT:
+                if (nfc_worker_q_hdl == NULL)
+                {
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                    break;
+                }
+
                 ret = xQueueReceive(nfc_worker_q_hdl, &q_item, pdMS_TO_TICKS(100));//portMAX_DELAY);
                 if (ret==pdTRUE)
                 {
@@ -316,6 +346,11 @@ void nfc_worker_task(void *arg)
                 //platformLog("NFC Worker Task: Processing\r\n");
                 m1_wdt_reset();
                 NfcRole.nfc_process_func();
+                if (nfc_worker_q_hdl == NULL)
+                {
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                    break;
+                }
                 ret = xQueueReceive(nfc_worker_q_hdl, &q_item, 0);//worker tick delay & Q wait
                 if (ret==pdTRUE)
                 {
@@ -354,4 +389,3 @@ void nfc_worker_task(void *arg)
         //xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
 	}
 }
-

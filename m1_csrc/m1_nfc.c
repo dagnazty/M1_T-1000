@@ -9,6 +9,7 @@
 #include "m1_nfc.h"
 #include "m1_storage.h"
 #include "m1_sdcard.h"
+#include "m1_display.h"
 #include "m1_virtual_kb.h"
 #include "app_x-cube-nfcx.h"
 #include "uiView.h"
@@ -268,7 +269,16 @@ void menu_nfc_init(void)
     BaseType_t ret;
     size_t free_heap_before = xPortGetFreeHeapSize();
     platformLog("[NFC] free heap before create: %u bytes\r\n", (unsigned)free_heap_before);
+    nfc_worker_q_hdl = xQueueCreate(10, sizeof(S_M1_Main_Q_t));
+    if (nfc_worker_q_hdl==NULL)
+    {
+        platformLog("[NFC] nfc_worker_q create failed!\r\n");
+        return;
+    }
+
 	osDelay(100);
+
+    nfc_worker_reset_state();
 
     ret = xTaskCreate(nfc_worker_task,
                       "nfc_worker",
@@ -282,20 +292,12 @@ void menu_nfc_init(void)
         platformLog("[NFC] nfc_worker_task create failed! ret=%d, hdl=%p\r\n",
                     (int)ret, nfc_worker_task_hdl);
         nfc_worker_task_hdl = NULL;
+        vQueueDelete(nfc_worker_q_hdl);
+        nfc_worker_q_hdl = NULL;
         return;    
     }
 	platformLog("[NFC] xTaskCreate ret=%ld, handle=%p\r\n",
             (long)ret, nfc_worker_task_hdl);
-
-    
-    nfc_worker_q_hdl = xQueueCreate(10, sizeof(S_M1_Main_Q_t));
-    if (nfc_worker_q_hdl==NULL)
-    {
-        platformLog("[NFC] nfc_worker_q create failed! delete task and return\r\n");
-        vTaskDelete(nfc_worker_task_hdl);
-        nfc_worker_task_hdl = NULL;
-        return;
-    }
 
     size_t free_heap_after = xPortGetFreeHeapSize();
     platformLog("[NFC] free heap after create: %u bytes\r\n", (unsigned)free_heap_after);
@@ -489,31 +491,28 @@ static void nfc_read_gui_update(uint8_t param)
     if( param==NFC_READ_DISPLAY_PARAM_READING_READY )	// reading
     {
 		u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-		u8g2_DrawXBMP(&m1_u8g2, 0, 0, 48, 48, nfc_read_48x48);
+		m1_draw_header_bar(&m1_u8g2, "NFC Read", "Live");
+		u8g2_DrawXBMP(&m1_u8g2, 2, 14, 48, 48, nfc_read_48x48);
+		m1_draw_content_frame(&m1_u8g2, 52, 16, 72, 28);
 		u8g2_SetFont(&m1_u8g2, M1_DISP_RUN_MENU_FONT_B);
-		u8g2_DrawStr(&m1_u8g2, 70, 20, "Reading");
+		m1_draw_text(&m1_u8g2, 58, 24, 60, "Reading", TEXT_ALIGN_LEFT);
 		u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-		u8g2_DrawStr(&m1_u8g2, 50, 30, "Hold card next");
-		u8g2_DrawStr(&m1_u8g2, 50, 40, "to M1's back");
+		m1_draw_text(&m1_u8g2, 58, 33, 60, "Hold card", TEXT_ALIGN_LEFT);
+		m1_draw_text(&m1_u8g2, 58, 41, 60, "to the back", TEXT_ALIGN_LEFT);
     }
     else if( param==NFC_READ_DISPLAY_PARAM_READING_COMPLETE )	// read done
     {
 		platformLog("NFC Read Done UI Display\r\n");
 		u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+		m1_draw_header_bar(&m1_u8g2, "NFC Read", "Done");
+		m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
 		u8g2_SetFont(&m1_u8g2, M1_DISP_RUN_MENU_FONT_B);
-		u8g2_DrawStr(&m1_u8g2, 2, 12, NFC_Type);
-		u8g2_DrawStr(&m1_u8g2, 2, 22, NFC_Family);
+		m1_draw_text(&m1_u8g2, 8, 24, 114, NFC_Type, TEXT_ALIGN_LEFT);
+		m1_draw_text(&m1_u8g2, 8, 33, 114, NFC_Family, TEXT_ALIGN_LEFT);
 		u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-		u8g2_DrawStr(&m1_u8g2, 2, 32, "UID:");
-		u8g2_DrawStr(&m1_u8g2, 25, 32, NFC_UID);
-
-		u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-		u8g2_DrawBox(&m1_u8g2, 0, 52, 128, 12); // Draw an inverted bar at the bottom to display options
-		u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // Write text in inverted color
-		u8g2_DrawXBMP(&m1_u8g2, 1, 53, 8, 8, arrowleft_8x8); // draw arrowleft icon
-		u8g2_DrawStr(&m1_u8g2, 11, 61, "Retry");
-		u8g2_DrawXBMP(&m1_u8g2, 119, 53, 8, 8, arrowright_8x8); // draw arrowright icon
-		u8g2_DrawStr(&m1_u8g2, 97, 61, "More");
+		m1_draw_text(&m1_u8g2, 8, 42, 114, "UID:", TEXT_ALIGN_LEFT);
+		m1_draw_text(&m1_u8g2, 30, 42, 92, NFC_UID, TEXT_ALIGN_LEFT);
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Retry", "More", arrowright_8x8);
 #ifdef SEE_DUMP_MEMORY
         m1_wdt_reset();
 		nfc_run_ctx_t * c = nfc_ctx_get(); //DBG NFC Context(UID) Data 
@@ -1913,29 +1912,21 @@ static void nfc_info_drawing(void)
     }
 
     u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-    u8g2_FirstPage(&m1_u8g2); 
+    u8g2_FirstPage(&m1_u8g2);
+
+    m1_draw_header_bar(&m1_u8g2, "NFC Info", "Card");
+    m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
 
     u8g2_SetFont(&m1_u8g2, M1_DISP_RUN_MENU_FONT_B);
-    u8g2_DrawStr(&m1_u8g2, 2, 12, type_str);
-
-    u8g2_DrawStr(&m1_u8g2, 2, 22, family_str);
+    m1_draw_text(&m1_u8g2, 8, 24, 114, type_str, TEXT_ALIGN_LEFT);
+    m1_draw_text(&m1_u8g2, 8, 33, 114, family_str, TEXT_ALIGN_LEFT);
 
     u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-    u8g2_DrawStr(&m1_u8g2, 2, 32, "UID:");
-    u8g2_DrawStr(&m1_u8g2, 25, 32, uid_str);
+    m1_draw_text(&m1_u8g2, 8, 42, 114, "UID:", TEXT_ALIGN_LEFT);
+    m1_draw_text(&m1_u8g2, 30, 42, 92, uid_str, TEXT_ALIGN_LEFT);
+    m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "More", arrowright_8x8);
 
-    u8g2_DrawStr(&m1_u8g2, 2, 42,  "ATQA:");
-    u8g2_DrawStr(&m1_u8g2, 40, 42, atqa_str);
-    u8g2_DrawStr(&m1_u8g2, 80, 42, "SAK:");
-    u8g2_DrawStr(&m1_u8g2, 105, 42, sak_str);
-
-    u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-    u8g2_DrawBox(&m1_u8g2, 0, 52, 128, 12); 
-    u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); 
-    u8g2_DrawXBMP(&m1_u8g2, 119, 53, 8, 8, arrowright_8x8); 
-    u8g2_DrawStr(&m1_u8g2, 97, 61, "More");
-
-    m1_u8g2_nextpage(); 
+    m1_u8g2_nextpage();
 }
 
 /*============================================================================*/
@@ -1995,16 +1986,17 @@ void m1_nfc_info_more_draw(void)
 
     u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
     u8g2_FirstPage(&m1_u8g2);
-
-
+    m1_draw_header_bar(&m1_u8g2, "NFC Pages", "Dump");
+    m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
     u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
     if (total_pages==0)
     {
 		u8g2_SetFont(&m1_u8g2, M1_DISP_RUN_MENU_FONT_B);
-		u8g2_DrawStr(&m1_u8g2, 2, 20, "No page data");
+		m1_draw_text(&m1_u8g2, 8, 25, 114, "No page data", TEXT_ALIGN_LEFT);
 		u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-		u8g2_DrawStr(&m1_u8g2, 2, 32, "Only UID-level info");
-		u8g2_DrawStr(&m1_u8g2, 2, 42, "available for this tag");
+		m1_draw_text(&m1_u8g2, 8, 34, 114, "Only UID-level info", TEXT_ALIGN_LEFT);
+		m1_draw_text(&m1_u8g2, 8, 43, 114, "available for this tag", TEXT_ALIGN_LEFT);
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "", NULL);
 		m1_u8g2_nextpage();
     }
     else
@@ -2013,8 +2005,7 @@ void m1_nfc_info_more_draw(void)
         snprintf(header, sizeof(header),
                  "Max %03u  [hex]  | [Asc]",
                  (unsigned)max_page);
-        u8g2_DrawStr(&m1_u8g2, 2, 8, header);
-		u8g2_DrawStr(&m1_u8g2, 2, 16,  "------------------------");
+        m1_draw_text(&m1_u8g2, 8, 22, 114, header, TEXT_ALIGN_LEFT);
 
     }
 
@@ -2029,9 +2020,10 @@ void m1_nfc_info_more_draw(void)
             if (!nfc_ctx_format_t2t_page_line(page, line, sizeof(line)))
                 continue;
 
-            uint8_t y = 24 + row * 8;
-            u8g2_DrawStr(&m1_u8g2, 2, y, line);
+            uint8_t y = 30 + row * 6;
+            m1_draw_text(&m1_u8g2, 8, y, 114, line, TEXT_ALIGN_LEFT);
         }
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "", NULL);
     }
 
     m1_u8g2_nextpage();
@@ -4609,4 +4601,3 @@ void nfc_add_manually(void)
 		m1_message_box(&m1_u8g2, "Add Manually", "SD card error", " ", "BACK to return");
 	}
 }
-

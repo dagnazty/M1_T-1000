@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include "stm32h5xx_hal.h"
 #include "main.h"
+#include "m1_display.h"
 #include "m1_sdcard.h"
 #include "m1_storage.h"
 
@@ -746,31 +747,33 @@ static void browse_gui_update(uint8_t sel_item, char *file_name)
 	uint8_t i, len, menu_text_y;
 	char *print_ptr;
 
-	menu_text_y = THIS_LCD_MENU_TEXT_FIRST_ROW_Y;
+	menu_text_y = 24;
 
 	/* Graphic work starts here */
 	m1_u8g2_firstpage(); // This call required for page drawing in mode 1
+	m1_draw_header_bar(&m1_u8g2, "File Actions", NULL);
+	m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 27);
 	for (i=0; i<SDCARD_EXPLORE_FUNCTIONS_N; i++)
 	{
 		if ( i==sel_item )
 		{
-			// Draw box for selected menu item with text color
-			u8g2_DrawBox(&m1_u8g2, 0, menu_text_y - THIS_LCD_MENU_TEXT_ROW_SPACE + 2, M1_LCD_SUB_MENU_TEXT_FRAME_W, THIS_LCD_MENU_TEXT_ROW_SPACE);
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // set to background color
+			u8g2_DrawBox(&m1_u8g2, 6, menu_text_y - 7, 114, 9);
+			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
 			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_B);
-			u8g2_DrawStr(&m1_u8g2, 4, menu_text_y, sdcard_explore_options[i]);
-			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT); // return to text color
-			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N); // return to default font
+			u8g2_DrawStr(&m1_u8g2, 10, menu_text_y, sdcard_explore_options[i]);
+			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
 		}
 		else
 		{
-			u8g2_DrawStr(&m1_u8g2, 4, menu_text_y, sdcard_explore_options[i]);
+			u8g2_DrawFrame(&m1_u8g2, 6, menu_text_y - 7, 114, 9);
+			u8g2_DrawStr(&m1_u8g2, 10, menu_text_y, sdcard_explore_options[i]);
 		}
 		menu_text_y += THIS_LCD_MENU_TEXT_ROW_SPACE;
 	} // for (i=0; i<SDCARD_EXPLORE_FUNCTIONS_N; i++)
 
 	// Draw info box at the bottom
-	m1_info_box_display_init(true);
+	m1_draw_content_frame(&m1_u8g2, 2, 43, 124, 19);
 	print_ptr = file_name;
 	len = strlen(file_name);
 	if ( len >= BROWSE_GUI_DISP_LINE_LEN_MAX )
@@ -779,7 +782,9 @@ static void browse_gui_update(uint8_t sel_item, char *file_name)
 		strcpy(&prn_name[BROWSE_GUI_DISP_LINE_LEN_MAX - 3], "...");
 		print_ptr = prn_name;
 	}
-	m1_info_box_display_draw(INFO_BOX_ROW_1, print_ptr);
+	u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+	m1_draw_text(&m1_u8g2, 8, 55, 114, print_ptr, TEXT_ALIGN_LEFT);
+	m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Open", arrowright_8x8);
 
     m1_u8g2_nextpage(); // Update display RAM
 

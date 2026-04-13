@@ -342,64 +342,66 @@ void gpio_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
 	uint16_t msg_len, msg_id;
 
 	n_items = phmenu->num_submenu_items;
-	menu_text_y = THIS_LCD_MENU_TEXT_FIRST_ROW_Y;
+	menu_text_y = 24;
 
 	/* Graphic work starts here */
 	m1_u8g2_firstpage(); // This call required for page drawing in mode 1
     do
     {
+    	m1_draw_header_bar(&m1_u8g2, "GPIO", NULL);
+    	m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 27);
     	for (i=0; i<n_items; i++)
     	{
     		if ( i==sel_item )
     		{
-    			// Draw box for selected menu item with text color
-    			u8g2_DrawBox(&m1_u8g2, 0, menu_text_y - THIS_LCD_MENU_TEXT_ROW_SPACE + 2, M1_LCD_SUB_MENU_TEXT_FRAME_W, THIS_LCD_MENU_TEXT_ROW_SPACE);
+    			u8g2_DrawBox(&m1_u8g2, 6, menu_text_y - 7, 114, 9);
     			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // set to background color
     			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_B);
-    			u8g2_DrawStr(&m1_u8g2, 4, menu_text_y, phmenu->submenu[i]->title);
+    			u8g2_DrawStr(&m1_u8g2, 10, menu_text_y, phmenu->submenu[i]->title);
     			if ( i==0 ) // Index of GPIO Control
     			{
     		    	// Draw arrows left and right
-    		    	u8g2_DrawXBMP(&m1_u8g2, M1_LCD_DISPLAY_WIDTH - 40, menu_text_y - THIS_LCD_MENU_TEXT_ROW_SPACE + 2, 10, 10, arrowleft_10x10);
-    		    	u8g2_DrawXBMP(&m1_u8g2, M1_LCD_DISPLAY_WIDTH - 20, menu_text_y - THIS_LCD_MENU_TEXT_ROW_SPACE + 2, 10, 10, arrowright_10x10);
+    		    	u8g2_DrawXBMP(&m1_u8g2, 98, menu_text_y - 7, 10, 10, arrowleft_10x10);
+    		    	u8g2_DrawXBMP(&m1_u8g2, 110, menu_text_y - 7, 10, 10, arrowright_10x10);
     			}
     			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT); // return to text color
     			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N); // return to default font
     		}
     		else
     		{
-    			u8g2_DrawStr(&m1_u8g2, 4, menu_text_y, phmenu->submenu[i]->title);
+    			u8g2_DrawFrame(&m1_u8g2, 6, menu_text_y - 7, 114, 9);
+    			u8g2_DrawStr(&m1_u8g2, 10, menu_text_y, phmenu->submenu[i]->title);
     		}
     		menu_text_y += THIS_LCD_MENU_TEXT_ROW_SPACE;
     	} // for (i=0; i<n_items; i++)
 
-    	// Draw info box at the bottom
-    	m1_info_box_display_init(false);
+    	m1_draw_content_frame(&m1_u8g2, 2, 43, 124, 19);
 
     	switch ( sel_item )
     	{
     		case 0: // GPIO
     			sprintf(prn_name, "%s: %s", m1_ext_gpio_label[m1_ext_gpio_id], (m1_ext_gpio_stat[m1_ext_gpio_id]==1)?"ON":"OFF");
-    			m1_info_box_display_draw(INFO_BOX_ROW_1, prn_name);
+    			m1_draw_text(&m1_u8g2, 8, 55, 114, prn_name, TEXT_ALIGN_LEFT);
     			break;
 
     		case 1: // Power 3.3V
     			sprintf(prn_name, "%s: %s", m1_ext_gpio_label[0], (m1_ext_gpio_stat[0]==1)?"ON":"OFF");
-    	    	m1_info_box_display_draw(INFO_BOX_ROW_1, prn_name);
+    	    	m1_draw_text(&m1_u8g2, 8, 55, 114, prn_name, TEXT_ALIGN_LEFT);
     			break;
 
     		case 2: // Power 5.0V
     			sprintf(prn_name, "%s: %s", m1_ext_gpio_label[1], (m1_ext_gpio_stat[1]==1)?"ON":"OFF");
-    	    	m1_info_box_display_draw(INFO_BOX_ROW_1, prn_name);
+    	    	m1_draw_text(&m1_u8g2, 8, 55, 114, prn_name, TEXT_ALIGN_LEFT);
     			break;
 
     		case 3:
-    	    	m1_info_box_display_draw(INFO_BOX_ROW_1, "Please update firmware!");
+    	    	m1_draw_text(&m1_u8g2, 8, 55, 114, "Please update firmware!", TEXT_ALIGN_LEFT);
     			break;
 
     		default: // Unknown selection
     			break;
     	} // switch ( sel_item )
+    	m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Toggle", arrowright_8x8);
     } while (m1_u8g2_nextpage());
 
 } // void gpio_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
@@ -436,11 +438,10 @@ void gpio_xkey_handler(S_M1_Key_Event event, uint8_t button_id, uint8_t sel_item
 		}
 
 		sprintf(prn_name, "%s: %s", m1_ext_gpio_label[m1_ext_gpio_id], (m1_ext_gpio_stat[m1_ext_gpio_id]==1)?"ON":"OFF");
-    	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // set to background color
-    	// Clear old content
-    	m1_info_box_display_clear();
-    	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT); // set to text color
-		m1_info_box_display_draw(INFO_BOX_ROW_1, prn_name);
+    	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
+    	u8g2_DrawBox(&m1_u8g2, 4, 45, 120, 15);
+    	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+		m1_draw_text(&m1_u8g2, 8, 55, 114, prn_name, TEXT_ALIGN_LEFT);
 
 		m1_u8g2_nextpage(); // Update LCD display RAM
 	} // if ( event==BUTTON_EVENT_CLICK )

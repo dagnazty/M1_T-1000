@@ -169,35 +169,35 @@ void firmware_update_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
 	uint8_t i, n_items;
 	uint8_t menu_text_y;
 	uint8_t prn_name[GUI_DISP_LINE_LEN_MAX + 1] = {0};
+	char line1[32] = {0};
 
 	n_items = phmenu->num_submenu_items;
-	menu_text_y = THIS_LCD_MENU_TEXT_FIRST_ROW_Y;
+	menu_text_y = 24;
 
 	/* Graphic work starts here */
 	m1_u8g2_firstpage(); // This call required for page drawing in mode 1
     do
     {
+    	m1_draw_header_bar(&m1_u8g2, "Settings", "FW Upd");
+    	m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 37);
     	for (i=0; i<n_items; i++)
     	{
     		if ( i==sel_item )
     		{
-    			// Draw box for selected menu item with text color
-    			u8g2_DrawBox(&m1_u8g2, 0, menu_text_y - THIS_LCD_MENU_TEXT_ROW_SPACE + 2, M1_LCD_SUB_MENU_TEXT_FRAME_W, THIS_LCD_MENU_TEXT_ROW_SPACE);
+    			u8g2_DrawBox(&m1_u8g2, 6, menu_text_y - 7, 114, 9);
     			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // set to background color
     			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_B);
-    			u8g2_DrawStr(&m1_u8g2, 4, menu_text_y, phmenu->submenu[i]->title);
+    			u8g2_DrawStr(&m1_u8g2, 10, menu_text_y, phmenu->submenu[i]->title);
     			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT); // return to text color
     			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N); // return to default font
     		}
     		else
     		{
-    			u8g2_DrawStr(&m1_u8g2, 4, menu_text_y, phmenu->submenu[i]->title);
+    			u8g2_DrawFrame(&m1_u8g2, 6, menu_text_y - 7, 114, 9);
+    			u8g2_DrawStr(&m1_u8g2, 10, menu_text_y, phmenu->submenu[i]->title);
     		}
-    		menu_text_y += THIS_LCD_MENU_TEXT_ROW_SPACE;
+    		menu_text_y += 10;
     	} // for (i=0; i<n_items; i++)
-
-    	// Draw info box at the bottom
-    	m1_info_box_display_init(true);
 
     	switch ( sel_item )
     	{
@@ -219,32 +219,28 @@ void firmware_update_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
     	    	switch (fw_update_status)
     	    	{
     	    		case M1_FW_UPDATE_READY:
-    	    			m1_info_box_display_draw(INFO_BOX_ROW_1, prn_name);
-        				sprintf(prn_name, "New ver. %d.%d.%d.%d", (uint8_t)(fw_version_new>>24), (uint8_t)(fw_version_new>>16), (uint8_t)(fw_version_new>>8), (uint8_t)fw_version_new);
-        				m1_info_box_display_draw(INFO_BOX_ROW_2, prn_name);
-        				sprintf(prn_name, "Old ver. %d.%d.%d.%d", m1_device_stat.config.fw_version_major, m1_device_stat.config.fw_version_minor, m1_device_stat.config.fw_version_build, m1_device_stat.config.fw_version_rc);
-        				m1_info_box_display_draw(INFO_BOX_ROW_3, prn_name);
+    	    			strncpy(line1, (const char *)prn_name, sizeof(line1) - 1);
     	    			break;
 
     	    		case M1_FW_IMAGE_FILE_ACCESS_ERROR:
-        				m1_info_box_display_draw(INFO_BOX_ROW_1, "Image access error!");
+        				strcpy(line1, "Image access error!");
         				break;
 
     	    		case M1_FW_IMAGE_FILE_TYPE_ERROR:
         			case M1_FW_IMAGE_SIZE_INVALID:
-        				m1_info_box_display_draw(INFO_BOX_ROW_1, "Invalid image file!");
+        				strcpy(line1, "Invalid image file!");
         				break;
 
         			case M1_FW_VERSION_ERROR:
-        				m1_info_box_display_draw(INFO_BOX_ROW_1, "Image version error!");
+        				strcpy(line1, "Image version error!");
         				break;
 
         			case M1_FW_ISM_BAND_REGION_ERROR:
-        				m1_info_box_display_draw(INFO_BOX_ROW_1, "ISM region error!");
+        				strcpy(line1, "ISM region error!");
         				break;
 
         			case M1_FW_CRC_CHECKSUM_UNMATCHED:
-        				m1_info_box_display_draw(INFO_BOX_ROW_1, "CRC failed!");
+        				strcpy(line1, "CRC failed!");
         				break;
 
         			default:
@@ -256,22 +252,22 @@ void firmware_update_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
 		    	switch (fw_update_status)
 		    	{
 		    		case M1_FW_UPDATE_READY:
-		    			m1_info_box_display_draw(INFO_BOX_ROW_1, "Ready to flash!");
+		    			strcpy(line1, "Ready to flash!");
 		    			break;
 
 		    		case M1_FW_UPDATE_SUCCESS:
-		    			m1_info_box_display_draw(INFO_BOX_ROW_1, "Update successfully!");
+		    			strcpy(line1, "Update successful!");
 		    			fw_update_status = M1_FW_UPDATE_NOT_READY; // Reset after process complete
 		    			f_info->file_is_selected = false; // Reset
 		    			// Display warning message: device will reboot in n seconds...
 		    			break;
 
 		    		case M1_FW_UPDATE_FAILED:
-		    			m1_info_box_display_draw(INFO_BOX_ROW_1, "Update failed!");
+		    			strcpy(line1, "Update failed!");
 		    			break;
 
         			case M1_FW_UPDATE_LOW_BATTERY:
-        				m1_info_box_display_draw(INFO_BOX_ROW_1, "Battery level < 50%!");
+        				strcpy(line1, "Battery level < 50%!");
         				break;
 
 		    		default:
@@ -282,6 +278,8 @@ void firmware_update_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
     		default: // Unknown selection
     			break;
     	} // switch ( sel_item )
+    	if (line1[0]) m1_draw_text(&m1_u8g2, 8, 49, 114, line1, TEXT_ALIGN_LEFT);
+    	m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Open", arrowright_8x8);
     } while (m1_u8g2_nextpage());
 
 } // void firmware_update_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
