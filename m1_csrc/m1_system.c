@@ -20,6 +20,7 @@
 #include "app_freertos.h"
 #include "m1_tasks.h"
 #include "m1_branding.h"
+#include "m1_display.h"
 #include "m1_power_ctl.h"
 #include "m1_t1000_version.h"
 #include "m1_fw_update_bl.h"
@@ -63,6 +64,7 @@ uint8_t                 m1_brightness_level = 4;   /* Max by default */
 uint8_t                 m1_buzzer_on = 1;
 uint8_t                 m1_led_notify_on = 1;
 uint8_t                 m1_sleep_timeout_idx = 1;  /* 1 minute default */
+int8_t                  m1_tz_offset_hours = 0;    /* UTC offset for local time (-12..+14) */
 #ifdef M1_APP_BADBT_ENABLE
 char                    m1_badbt_name[BADBT_NAME_MAX_LEN + 1] = "M1-BadBT";
 #endif
@@ -918,33 +920,45 @@ static void startup_bu_registers_init(void)
 void startup_info_screen_display(const char *scr_text)
 {
 	char fw_ver[24];
-	uint8_t len, x0;
+	uint8_t x0;
+	uint16_t text_w;
+	const uint8_t logo_x = (M1_LCD_DISPLAY_WIDTH - 40U) / 2U;
+	const uint8_t footer_y = 46U;
 
 	u8g2_SetPowerSave(&m1_u8g2, false);
 
-	/* Graphic work starts here */
 	u8g2_FirstPage(&m1_u8g2);
-	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-	u8g2_DrawXBMP(&m1_u8g2, M1_POWERUP_LOGO_LEFT_POS_X, M1_POWERUP_LOGO_TOP_POS_Y, M1_POWERUP_LOGO_WIDTH, M1_POWERUP_LOGO_HEIGHT, m1_logo_40x32);
+	do
+	{
+		u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+		u8g2_DrawFrame(&m1_u8g2, 0, 0, M1_LCD_DISPLAY_WIDTH, M1_LCD_DISPLAY_HEIGHT);
+		u8g2_DrawHLine(&m1_u8g2, 12, footer_y - 2, 104);
+		u8g2_DrawXBMP(&m1_u8g2, logo_x, 4, 40, 32, m1_logo_40x32);
 
-	strcpy(fw_ver, T1000_VERSION_STRING);
-	len = strlen(fw_ver);
-	u8g2_SetFont(&m1_u8g2, M1_POWERUP_LOGO_FONT);
-	u8g2_DrawStr(&m1_u8g2, M1_POWERUP_LOGO_LEFT_POS_X + M1_POWERUP_LOGO_WIDTH + 3, M1_POWERUP_LOGO_TOP_POS_Y + 15, M1_PRODUCT_NAME);
-	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
-	u8g2_DrawStr(&m1_u8g2, M1_POWERUP_LOGO_LEFT_POS_X + M1_POWERUP_LOGO_WIDTH + 3, M1_POWERUP_LOGO_TOP_POS_Y + 25, fw_ver);
+		strcpy(fw_ver, T1000_VERSION_STRING);
 
-	len = strlen(scr_text);
-	x0 = (M1_LCD_DISPLAY_WIDTH - len*M1_GUI_FONT_WIDTH)/2;
-	if ( x0 >= M1_GUI_FONT_WIDTH )
-		x0 -= M1_GUI_FONT_WIDTH;
+		u8g2_SetFont(&m1_u8g2, M1_POWERUP_LOGO_FONT);
+		text_w = u8g2_GetStrWidth(&m1_u8g2, M1_PRODUCT_NAME);
+		x0 = (text_w < M1_LCD_DISPLAY_WIDTH) ? (uint8_t)((M1_LCD_DISPLAY_WIDTH - text_w) / 2U) : 0U;
+		u8g2_DrawStr(&m1_u8g2, x0, 52, M1_PRODUCT_NAME);
 
-	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_B);
-	u8g2_DrawStr(&m1_u8g2, x0, 62, scr_text);
+		if ((scr_text != NULL) && (scr_text[0] != '\0'))
+		{
+			u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_B);
+			text_w = u8g2_GetStrWidth(&m1_u8g2, scr_text);
+			x0 = (text_w < 108U) ? (uint8_t)((108U - text_w) / 2U + 10U) : 10U;
+			u8g2_DrawStr(&m1_u8g2, x0, 62, scr_text);
+		}
+		else
+		{
+			u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
+			text_w = u8g2_GetStrWidth(&m1_u8g2, fw_ver);
+			x0 = (text_w < M1_LCD_DISPLAY_WIDTH) ? (uint8_t)((M1_LCD_DISPLAY_WIDTH - text_w) / 2U) : 0U;
+			u8g2_DrawStr(&m1_u8g2, x0, 62, fw_ver);
+		}
+	} while (u8g2_NextPage(&m1_u8g2));
 
-	m1_u8g2_nextpage(); // Update display RAM
-
-	lp5814_backlight_on(M1_BACKLIGHT_BRIGHTNESS); // Turn on backlight
+	lp5814_backlight_on(M1_BACKLIGHT_BRIGHTNESS);
 
 	m1_device_stat.op_mode = M1_OPERATION_MODE_DISPLAY_ON; // update new state
 	m1_device_stat.active_timestamp = HAL_GetTick(); // reset timeout
@@ -997,6 +1011,47 @@ void m1_get_datetime(m1_time_t *dt)
 void m1_get_localtime(m1_time_t *dt)
 {
 	m1_get_datetime(dt);
+
+	if (dt == NULL || m1_tz_offset_hours == 0) return;
+
+	int16_t hour = (int16_t)dt->hour + (int16_t)m1_tz_offset_hours;
+
+	while (hour < 0)
+	{
+		hour += 24;
+		if (dt->day > 1U) { dt->day--; }
+		else
+		{
+			if (dt->month > 1U) { dt->month--; }
+			else { dt->month = 12U; dt->year--; }
+			static const uint8_t mdays[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+			dt->day = mdays[dt->month - 1U];
+			if (dt->month == 2U && dt->year % 4U == 0U && (dt->year % 100U != 0U || dt->year % 400U == 0U))
+				dt->day = 29U;
+		}
+		if (dt->weekday >= 1U && dt->weekday <= 7U)
+			dt->weekday = (dt->weekday == 1U) ? 7U : (uint8_t)(dt->weekday - 1U);
+	}
+
+	while (hour >= 24)
+	{
+		hour -= 24;
+		static const uint8_t mdays[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+		uint8_t dim = mdays[dt->month - 1U];
+		if (dt->month == 2U && dt->year % 4U == 0U && (dt->year % 100U != 0U || dt->year % 400U == 0U))
+			dim = 29U;
+		if (dt->day < dim) { dt->day++; }
+		else
+		{
+			dt->day = 1U;
+			if (dt->month < 12U) { dt->month++; }
+			else { dt->month = 1U; dt->year++; }
+		}
+		if (dt->weekday >= 1U && dt->weekday <= 7U)
+			dt->weekday = (dt->weekday == 7U) ? 1U : (uint8_t)(dt->weekday + 1U);
+	}
+
+	dt->hour = (uint8_t)hour;
 }
 
 /*============================================================================*/

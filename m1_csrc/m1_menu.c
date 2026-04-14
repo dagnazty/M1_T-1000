@@ -586,15 +586,31 @@ S_M1_Menu_t menu_FileTools =
     "File Tools", app_file_tools_run, NULL, NULL, 0, 0, NULL, NULL, {NULL}
 };
 
+S_M1_Menu_t menu_Clock =
+{
+    "Clock", app_clock_run, NULL, NULL, 0, 0, NULL, NULL, {NULL}
+};
+
+S_M1_Menu_t menu_HexViewer =
+{
+    "Hex Viewer", app_hex_viewer_run, NULL, NULL, 0, 0, NULL, NULL, {NULL}
+};
+
 S_M1_Menu_t menu_Apps_Browser =
 {
     "Apps Browser", game_apps_browser_run, NULL, NULL, 0, 0, NULL, NULL, {NULL}
 };
 
+S_M1_Menu_t menu_RGBBacklight =
+{
+    "RGB Backlight", app_rgb_backlight_run, NULL, NULL, 0, 0, NULL, NULL, {NULL}
+};
+
 S_M1_Menu_t menu_Apps =
 {
-    "Apps", NULL, NULL, NULL, 5, 0, menu_m1_icon_apps, NULL,
-    {&menu_DabTimer, &menu_DvdLogo, &menu_SystemDashboard, &menu_FileTools, &menu_Apps_Browser}
+    "Apps", NULL, NULL, NULL, 8, 0, menu_m1_icon_apps, NULL,
+    {&menu_DabTimer, &menu_DvdLogo, &menu_SystemDashboard, &menu_FileTools,
+     &menu_Clock, &menu_HexViewer, &menu_RGBBacklight, &menu_Apps_Browser}
 };
 #endif /* M1_APP_APPS_ENABLE */
 

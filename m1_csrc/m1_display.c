@@ -16,12 +16,14 @@
 #include <stdio.h>
 //#include "stm32h5xx_hal.h"
 //#include "main.h"
+#include "battery.h"
 #include "m1_lp5814.h"
 #include "m1_io_defs.h"
 #include "m1_branding.h"
 #include "m1_compile_cfg.h"
 #include "m1_display.h"
 #include "m1_sdcard.h"
+#include "m1_wifi.h"
 
 /*************************** D E F I N E S ************************************/
 
@@ -514,17 +516,38 @@ uint8_t m1_gui_submenu_update(const char *phmenu[], uint8_t num_items, uint8_t s
 static void m1_gui_draw_menu_header(const char *title, uint8_t sel_item, uint8_t num_items)
 {
 	char header_status[12];
+	S_M1_Power_Status_t power_status;
+	char battery_status[8];
+	const char *wifi_status;
 
 	u8g2_DrawBox(&m1_u8g2, 0, 0, M1_LCD_DISPLAY_WIDTH, MENU_HEADER_HEIGHT - 1);
 	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
 	u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-	m1_draw_text(&m1_u8g2, 3, 8, 86, title, TEXT_ALIGN_LEFT);
-	snprintf(header_status, sizeof(header_status), "%u/%u", (unsigned)(sel_item + 1), (unsigned)num_items);
-	m1_draw_text(&m1_u8g2, 88, 8, 36, header_status, TEXT_ALIGN_RIGHT);
 
-	if (m1_sdcard_get_status() == SD_access_OK)
+	if (menu_level_id == 0)
 	{
-		u8g2_DrawXBMP(&m1_u8g2, 116, 1, 10, 10, sd_card_10x10);
+		battery_power_status_get(&power_status);
+		snprintf(battery_status, sizeof(battery_status), "%u%%", power_status.battery_level);
+		wifi_status = wifi_is_connected() ? "WF" : "--";
+
+		m1_draw_text(&m1_u8g2, 3, 8, 52, title, TEXT_ALIGN_LEFT);
+		m1_draw_text(&m1_u8g2, 56, 8, 22, battery_status, TEXT_ALIGN_RIGHT);
+		m1_draw_text(&m1_u8g2, 80, 8, 20, wifi_status, TEXT_ALIGN_CENTER);
+		if (m1_sdcard_get_status() == SD_access_OK)
+			u8g2_DrawXBMP(&m1_u8g2, 114, 1, 10, 10, sd_card_10x10);
+		else
+			m1_draw_text(&m1_u8g2, 104, 8, 20, "--", TEXT_ALIGN_RIGHT);
+	}
+	else
+	{
+		m1_draw_text(&m1_u8g2, 3, 8, 86, title, TEXT_ALIGN_LEFT);
+		snprintf(header_status, sizeof(header_status), "%u/%u", (unsigned)(sel_item + 1), (unsigned)num_items);
+		m1_draw_text(&m1_u8g2, 88, 8, 36, header_status, TEXT_ALIGN_RIGHT);
+
+		if (m1_sdcard_get_status() == SD_access_OK)
+		{
+			u8g2_DrawXBMP(&m1_u8g2, 116, 1, 10, 10, sd_card_10x10);
+		}
 	}
 
 	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
@@ -534,6 +557,7 @@ static void m1_gui_draw_menu_header(const char *title, uint8_t sel_item, uint8_t
 static void m1_gui_draw_main_menu_panel(void)
 {
 	u8g2_DrawFrame(&m1_u8g2, MENU_MAIN_PANEL_X, MENU_MAIN_PANEL_Y, MENU_MAIN_PANEL_W, MENU_MAIN_PANEL_H);
+	u8g2_DrawFrame(&m1_u8g2, MENU_MAIN_PANEL_X + 1, MENU_MAIN_PANEL_Y + 1, MENU_MAIN_PANEL_W - 2, MENU_MAIN_PANEL_H - 2);
 	u8g2_DrawXBMP(&m1_u8g2, 1, 18, 40, 32, m1_logo_40x32);
 	u8g2_DrawHLine(&m1_u8g2, 6, 52, 30);
 	u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
@@ -551,7 +575,6 @@ static void m1_gui_draw_main_menu_panel(void)
 /*============================================================================*/
 void m1_gui_scr_animation(void)
 {
-	static uint8_t image_index = 0;
 	static uint32_t time_t0 = 0;
 	static uint32_t time_tn = 0;
 
@@ -562,9 +585,6 @@ void m1_gui_scr_animation(void)
 	if ( (time_tn - time_t0) >= MENU_M1_SCR_ANI_TIMEOUT )
 	{
 		time_t0 = time_tn; // save current time
-		image_index++;
-		if ( image_index >= MENU_M1_LOGO_ARRAY_LEN )
-			image_index = 0;
 
 		// Draw time measured approximately 14ms for a full screen
 		// CPU running at 75MHz
@@ -572,7 +592,7 @@ void m1_gui_scr_animation(void)
 		u8g2_FirstPage(&m1_u8g2);
 		do
 	    {
-			u8g2_DrawXBMP(&m1_u8g2, 0, 0, M1_LCD_DISPLAY_WIDTH, M1_LCD_DISPLAY_HEIGHT, menu_m1_logo_array[image_index]);
+			u8g2_DrawXBMP(&m1_u8g2, 32, 0, 64, 64, m1_logo_64x64);
 	    } while (u8g2_NextPage(&m1_u8g2));
 	} // if ( (time_tn - time_t0) >= MENU_M1_SCR_ANI_TIMEOUT )
 } // void m1_gui_scr_animation(void)
@@ -894,10 +914,16 @@ void m1_draw_status_panel(u8g2_t *u8g2,
 /*============================================================================*/
 void m1_draw_icon(uint8_t color, u8g2_uint_t x, u8g2_uint_t y, u8g2_uint_t w, u8g2_uint_t h, const uint8_t *bitmap)
 {
-    u8g2_SetDrawColor(&m1_u8g2, color);
-    u8g2_FirstPage(&m1_u8g2);
-    u8g2_DrawXBMP(&m1_u8g2, x, y, w, h, bitmap);
-    u8g2_NextPage(&m1_u8g2);
+	if (bitmap == NULL)
+		return;
+
+	u8g2_SetDrawColor(&m1_u8g2, color);
+	u8g2_FirstPage(&m1_u8g2);
+	do
+	{
+		u8g2_DrawXBMP(&m1_u8g2, x, y, w, h, bitmap);
+	} while (u8g2_NextPage(&m1_u8g2));
+	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
 }
 
 /*============================================================================*/

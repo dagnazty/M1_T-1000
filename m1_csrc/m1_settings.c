@@ -16,6 +16,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "stm32h5xx_hal.h"
 #include "main.h"
 #include "m1_settings.h"
@@ -46,12 +47,13 @@
 #define ABOUT_BOX_Y_POS_ROW_5			50
 
 /* LCD & Notifications menu items */
-#define LCD_SETTINGS_ITEMS   5
+#define LCD_SETTINGS_ITEMS   6
 #define LCD_SET_BRIGHTNESS   0
 #define LCD_SET_BUZZER       1
 #define LCD_SET_LED          2
 #define LCD_SET_ORIENT       3
 #define LCD_SET_SLEEP        4
+#define LCD_SET_TIMEZONE     5
 
 //************************** S T R U C T U R E S *******************************
 
@@ -116,6 +118,7 @@ static const char *settings_lcd_item_label(uint8_t item)
         case LCD_SET_LED:        return "LED Notify";
         case LCD_SET_ORIENT:     return "Orientation";
         case LCD_SET_SLEEP:      return "Sleep After";
+        case LCD_SET_TIMEZONE:    return "UTC Offset";
         default:                 return "";
     }
 }
@@ -129,6 +132,15 @@ static const char *settings_lcd_item_value(uint8_t item)
         case LCD_SET_LED:        return m1_led_notify_on ? "On" : "Off";
         case LCD_SET_ORIENT:     return s_orient_text[m1_screen_orientation];
         case LCD_SET_SLEEP:      return s_sleep_text[m1_sleep_timeout_idx];
+        case LCD_SET_TIMEZONE:
+        {
+            static char tz_buf[8];
+            if (m1_tz_offset_hours >= 0)
+                snprintf(tz_buf, sizeof(tz_buf), "UTC+%d", m1_tz_offset_hours);
+            else
+                snprintf(tz_buf, sizeof(tz_buf), "UTC%d", m1_tz_offset_hours);
+            return tz_buf;
+        }
         default:                 return "";
     }
 }
@@ -245,6 +257,8 @@ void settings_lcd_and_notifications(void)
                 settings_apply_orientation((m1_screen_orientation == 0) ? 2 : (m1_screen_orientation - 1));
             else if (sel == LCD_SET_SLEEP)
                 m1_sleep_timeout_idx = (m1_sleep_timeout_idx == 0) ? 5 : (m1_sleep_timeout_idx - 1);
+            else if (sel == LCD_SET_TIMEZONE)
+                m1_tz_offset_hours = (m1_tz_offset_hours <= -12) ? 14 : (m1_tz_offset_hours - 1);
             needs_redraw = 1;
         }
 
@@ -267,6 +281,8 @@ void settings_lcd_and_notifications(void)
                 settings_apply_orientation((m1_screen_orientation + 1) % 3);
             else if (sel == LCD_SET_SLEEP)
                 m1_sleep_timeout_idx = (m1_sleep_timeout_idx >= 5) ? 0 : (m1_sleep_timeout_idx + 1);
+            else if (sel == LCD_SET_TIMEZONE)
+                m1_tz_offset_hours = (m1_tz_offset_hours >= 14) ? -12 : (m1_tz_offset_hours + 1);
             needs_redraw = 1;
         }
     }
@@ -514,6 +530,9 @@ void settings_save_to_sd(void)
     snprintf(buf, sizeof(buf), "esp32_auto_init=%d\n", m1_esp32_auto_init);
     f_write(&fp, buf, strlen(buf), &bw);
 
+    snprintf(buf, sizeof(buf), "tz_offset=%d\n", m1_tz_offset_hours);
+    f_write(&fp, buf, strlen(buf), &bw);
+
     snprintf(buf, sizeof(buf), "ism_region=%d\n", m1_device_stat.config.ism_band_region);
     f_write(&fp, buf, strlen(buf), &bw);
 
@@ -605,6 +624,16 @@ void settings_load_from_sd(void)
         val = (int)(*(p + 16) - '0');
         if (val == 0 || val == 1)
             m1_esp32_auto_init = (uint8_t)val;
+    }
+
+    /* Parse "tz_offset=X" */
+    p = strstr(buf, "tz_offset=");
+    if (p != NULL)
+    {
+        p += 10;
+        int tz = atoi(p);
+        if (tz >= -12 && tz <= 14)
+            m1_tz_offset_hours = (int8_t)tz;
     }
 
     /* Parse "ism_region=X" */

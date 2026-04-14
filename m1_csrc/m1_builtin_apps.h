@@ -17,5 +17,8 @@ void app_dab_timer_run(void);
 void app_dvd_logo_run(void);
 void app_system_dashboard_run(void);
 void app_file_tools_run(void);
+void app_clock_run(void);
+void app_hex_viewer_run(void);
+void app_rgb_backlight_run(void);
 
 #endif /* M1_BUILTIN_APPS_H_ */

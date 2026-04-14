@@ -94,6 +94,21 @@ static uint8_t wifi_scan_ap_options(const wifi_scanlist_t *ap);
 
 /*============================================================================*/
 /**
+  * @brief Report current remembered WiFi link state for shared UI
+  * @retval 1 when connected, otherwise 0
+  */
+/*============================================================================*/
+uint8_t wifi_is_connected(void)
+{
+#ifdef M1_APP_WIFI_CONNECT_ENABLE
+	return s_wifi_connected ? 1U : 0U;
+#else
+	return 0U;
+#endif
+}
+
+/*============================================================================*/
+/**
   * @brief  Initialize ESP32 module if not already initialized
   * @retval true if ready, false if failed
   */
@@ -1319,13 +1334,13 @@ void wifi_saved_networks(void)
 		y_offset += 8;
 
 		/* Instructions */
-		m1_draw_text(&m1_u8g2, 8, y_offset, 114, "OK to connect", TEXT_ALIGN_LEFT);
+		m1_draw_text(&m1_u8g2, 8, y_offset, 114, "OK connect", TEXT_ALIGN_LEFT);
 		y_offset += 8;
 		m1_draw_text(&m1_u8g2, 8, y_offset, 114, M1_WIFI_BAND_NOTE, TEXT_ALIGN_LEFT);
 		y_offset += 8;
-		m1_draw_text(&m1_u8g2, 8, y_offset, 114, "RIGHT to delete", TEXT_ALIGN_LEFT);
+		m1_draw_text(&m1_u8g2, 8, y_offset, 114, "RIGHT delete", TEXT_ALIGN_LEFT);
 
-		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Connect", arrowright_8x8);
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Delete", arrowright_8x8);
 
 		m1_u8g2_nextpage();
 
@@ -1591,7 +1606,7 @@ uint8_t wifi_sync_rtc(void)
 
 	if ( !wifi_ensure_esp32_ready() ) return 0;
 
-	/* Configure SNTP: enable, timezone 0, server */
+	/* Configure SNTP: enable, timezone 0 (UTC), server — offset applied locally */
 	spi_AT_send_recv("AT+CIPSNTPCFG=1,0,\"pool.ntp.org\"\r\n", resp, sizeof(resp), 2);
 
 	/* Wait for sync (up to 5 seconds) */

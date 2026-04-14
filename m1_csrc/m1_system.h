@@ -176,6 +176,7 @@ extern uint8_t              m1_brightness_level;   /* 0=Off, 1=Low, 2=Med, 3=Hig
 extern uint8_t              m1_buzzer_on;          /* 0=Off, 1=On */
 extern uint8_t              m1_led_notify_on;      /* 0=Off, 1=On */
 extern uint8_t              m1_sleep_timeout_idx;   /* 0=30s, 1=1m, 2=5m, 3=10m, 4=15m, 5=Never */
+extern int8_t               m1_tz_offset_hours;     /* UTC offset for local time (-12..+14) */
 #ifdef M1_APP_BADBT_ENABLE
 #define BADBT_NAME_MAX_LEN 20
 extern char m1_badbt_name[BADBT_NAME_MAX_LEN + 1];

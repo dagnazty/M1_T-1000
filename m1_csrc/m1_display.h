@@ -121,6 +121,7 @@ extern const uint8_t menu_m1_icon_apps[];
 extern const uint8_t menu_m1_icon_M1_logo_1[];
 extern const uint8_t m1_logo_26x14[];
 extern const uint8_t m1_logo_40x32[];
+extern const uint8_t m1_logo_64x64[];
 extern const uint8_t menu_scroll_bar_4x64[];
 extern const uint8_t m1_frame_75x16[];
 extern const uint8_t m1_frame_128_14[];

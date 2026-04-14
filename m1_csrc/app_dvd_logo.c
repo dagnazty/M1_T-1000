@@ -145,7 +145,10 @@ static void dvd_logo_draw(const dvd_logo_state_t *st)
         u8g2_DrawFrame(&m1_u8g2, st->x + 3, st->y + 3, DVD_LOGO_W, DVD_LOGO_H);
     }
 
+    u8g2_DrawBox(&m1_u8g2, st->x, st->y, DVD_LOGO_W, DVD_LOGO_H);
+    u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
     u8g2_DrawXBMP(&m1_u8g2, st->x, st->y, DVD_LOGO_W, DVD_LOGO_H, m1_logo_40x32);
+    u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
 
     if (st->paused)
     {
