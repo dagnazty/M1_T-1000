@@ -444,7 +444,9 @@ void m1_esp32_deinit(void)
 #ifndef ESP32_UART_DISABLE
 		esp32_UART_deinit();
 #endif // #ifndef ESP32_UART_DISABLE
-		esp32_disable();
+		/* Keep the ESP32 powered so WiFi/BT re-entry does not force a cold boot
+		 * after every menu exit. Callers that truly need a hard reset can still
+		 * invoke esp32_disable() explicitly. */
 
 		esp32_init_done = FALSE;
 		esp32_uart_init_done = FALSE;
