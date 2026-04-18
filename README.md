@@ -27,6 +27,9 @@ T-1000 firmware for the [Monstatek M1](https://monstatek.com) multi-tool device,
 - **Clone & Emulate** — copy and replay NFC tags
 - **NFC Fuzzer** — protocol testing tool
 - **MIFARE Classic Crypto1** support
+- **Maximum Power Carrier** — 40% modulation (ST25R3916 hardware maximum)
+- **Long Duration Tests** — carrier transmissions up to 60 seconds
+- **False Positive Prevention** — validation checks in scan functions
 
 ### RFID Enhancements
 - **20+ protocol decoders** — HID Generic, Indala, AWID, Pyramid, Paradox, IOProx, FDX-A/B, Viking, Electra, Gallagher, Jablotron, PAC/Stanley, and more
@@ -67,7 +70,15 @@ T-1000 firmware for the [Monstatek M1](https://monstatek.com) multi-tool device,
 - **Saved Networks** — manage stored WiFi credentials
 - **Sync RTC** — sync the device clock over WiFi SNTP
 - **Status** — view connection state, IP address, signal strength
-- **Band note** — ESP32-C6 Wi-Fi is 2.4 GHz only
+- **Attack List** — save targets for offensive tools
+- **Offensive Tools** — WiFi penetration testing utilities:
+  - **Deauth Flood** — send deauthentication frames to target AP
+  - **PMKID Capture** — capture WPA2/WPA3 PMKID hashes
+  - **Handshake Capture** — capture WPA2/WPA3 handshakes
+  - **Beacon Spam** — broadcast fake AP beacons
+  - **Karma Attack** — respond to all probe requests
+  - **Probe Sniff** — capture client probe requests
+- **ESP32-C6 coprocessor** provides 2.4 GHz WiFi (WiFi 6) and Bluetooth LE 5.0
 
 ### NFC/RFID Field Detector
 - Detect external 13.56 MHz NFC reader fields and ~125 kHz RFID reader fields
@@ -88,6 +99,10 @@ T-1000 firmware for the [Monstatek M1](https://monstatek.com) multi-tool device,
 - **Southpaw mode** — swap left/right button functions
 - **Safe NMI handler** — proper ECC fault recovery instead of hard fault
 - **Watchdog improvements** — task-level suspend/resume for long operations
+- **Virtual Keyboard** with MAC address formatting and colon-skipping
+- **ESP32 Readiness Checks** — ensure WiFi coprocessor is ready before sending commands
+- **SPI Retry Logic** — automatic retry for transient SPI communication failures
+- **Attack List Integration** — auto-fill BSSID/channel in offensive tools
 
 ## Companion App
 
@@ -115,9 +130,9 @@ All files use the Flipper Zero `.ir` format — you can also use IR files from t
 
 - **MCU:** STM32H573VIT6 (Cortex-M33, 250 MHz, 2 MB dual-bank flash, 640 KB RAM)
 - **Display:** 128x64 monochrome (ST7586s)
-- **WiFi/BT:** ESP32-C6 coprocessor (SPI AT interface)
+- **WiFi/BT:** ESP32-C6 coprocessor (SPI AT interface) — 2.4 GHz WiFi (WiFi 6) and Bluetooth LE 5.0
 - **RF:** Si4463 sub-GHz transceiver (300–928 MHz)
-- **NFC:** ST25R3916 (13.56 MHz)
+- **NFC:** ST25R3916 (13.56 MHz) — supports up to 40% modulation for maximum signal strength
 - **RFID:** 125 kHz ASK/PSK reader with T5577 write support
 - **IR:** TSOP38238 receiver + IR LED transmitter
 - **USB:** USB-C (CDC + MSC composite)
