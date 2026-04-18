@@ -24,6 +24,7 @@
 #include "m1_gpio.h"
 #include "m1_bq25896.h"
 #include "m1_lp5814.h"
+#include "m1_rgb_backlight.h"
 #include "m1_bq27421.h"
 #include "m1_fusb302.h"
 #include "battery.h"
@@ -768,7 +769,7 @@ void m1_pre_power_down(void)
 	// Disable IWDG - End
 
 	// LED Driver shutdown
-	lp5814_backlight_on(0); // Turn off back light
+	m1_backlight_on(0); // Turn off back light
 	lp5814_all_off_RGB();
 	lp5814_shutdown();
 

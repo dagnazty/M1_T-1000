@@ -14,6 +14,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdbool.h>
 //#include "stm32h5xx_hal.h"
 //#include "main.h"
 #include "battery.h"
@@ -233,6 +234,11 @@ void m1_gui_menu_update(const S_M1_Menu_t *phmenu, uint8_t sel_item, uint8_t dir
 	} // else if ( direction==MENU_UPDATE_RESTORE )
 	for (run=0; run<n_items; run++)
 	{
+		if (phmenu->submenu[run] == NULL) {
+			/* Should never happen, but prevent crash */
+			psubmenu[run] = "[ERROR]";
+			continue;
+		}
 		psubmenu[run] = phmenu->submenu[run]->title;
 	}
 	menu_level_id = (menu_level==0)?0:1;
@@ -561,7 +567,7 @@ static void m1_gui_draw_main_menu_panel(void)
 	u8g2_DrawXBMP(&m1_u8g2, 1, 18, 40, 32, m1_logo_40x32);
 	u8g2_DrawHLine(&m1_u8g2, 6, 52, 30);
 	u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
-	m1_draw_text(&m1_u8g2, 0, 60, MENU_MAIN_PANEL_W, M1_PRODUCT_MARK, TEXT_ALIGN_CENTER);
+	m1_draw_text(&m1_u8g2, 0, 60, MENU_MAIN_PANEL_W, "M1", TEXT_ALIGN_CENTER);
 }
 
 
@@ -821,15 +827,44 @@ void m1_draw_bottom_bar(u8g2_t *u8g2, const uint8_t *lbitmap, const char *ltext,
 /*============================================================================*/
 void m1_draw_header_bar(u8g2_t *u8g2, const char *title, const char *badge)
 {
+	S_M1_Power_Status_t power_status;
+	char battery_status[8];
+	bool sd_ok;
+	uint8_t title_w;
+
+	battery_power_status_get(&power_status);
+	snprintf(battery_status, sizeof(battery_status), "%u%%",
+	         (unsigned)power_status.battery_level);
+	sd_ok = (m1_sdcard_get_status() == SD_access_OK);
+
 	u8g2_SetDrawColor(u8g2, M1_DISP_DRAW_COLOR_TXT);
 	u8g2_DrawBox(u8g2, 0, 0, 128, 11);
 	u8g2_SetDrawColor(u8g2, M1_DISP_DRAW_COLOR_BG);
 	u8g2_SetFont(u8g2, M1_DISP_FUNC_MENU_FONT_N);
-	m1_draw_text(u8g2, 3, 8, badge ? 88 : 120, title ? title : M1_PRODUCT_MARK, TEXT_ALIGN_LEFT);
+
+	/* Layout (128-wide bar):
+	 *   [0..3] padding  [3..title_w]  title
+	 *   [badge at x=60..86]  (optional, only if passed)
+	 *   [battery% at x=86..112, right-aligned]
+	 *   [SD icon at x=114..124]  or "--" text when no SD
+	 * When no badge is passed, title gets the extra width. */
+	title_w = badge ? 54 : 82;
+	m1_draw_text(u8g2, 3, 8, title_w,
+	             title ? title : M1_PRODUCT_MARK, TEXT_ALIGN_LEFT);
 	if (badge != NULL)
 	{
-		m1_draw_text(u8g2, 92, 8, 32, badge, TEXT_ALIGN_RIGHT);
+		m1_draw_text(u8g2, 60, 8, 26, badge, TEXT_ALIGN_LEFT);
 	}
+	m1_draw_text(u8g2, 86, 8, 26, battery_status, TEXT_ALIGN_RIGHT);
+	if (sd_ok)
+	{
+		u8g2_DrawXBMP(u8g2, 114, 1, 10, 10, sd_card_10x10);
+	}
+	else
+	{
+		m1_draw_text(u8g2, 112, 8, 14, "--", TEXT_ALIGN_RIGHT);
+	}
+
 	u8g2_SetDrawColor(u8g2, M1_DISP_DRAW_COLOR_TXT);
 	u8g2_DrawHLine(u8g2, 0, 11, 128);
 }

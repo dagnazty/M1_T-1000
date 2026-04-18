@@ -21,5 +21,6 @@ void app_esp32_link_run(void);
 void app_clock_run(void);
 void app_hex_viewer_run(void);
 void app_rgb_backlight_run(void);
+void app_stock_backlight_run(void);
 
 #endif /* M1_BUILTIN_APPS_H_ */

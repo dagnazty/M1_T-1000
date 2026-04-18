@@ -501,6 +501,7 @@ target_sources(m1_01 INTERFACE
     ../../m1_csrc/app_hex_viewer.c
     ../../m1_csrc/m1_rgb_backlight.c
     ../../m1_csrc/app_rgb_backlight.c
+    ../../m1_csrc/app_stock_backlight.c
     # === Enhanced firmware: ELF App Loader (Phase 10) ===
     ../../m1_csrc/m1_elf_loader.c
     ../../m1_csrc/m1_app_api.c

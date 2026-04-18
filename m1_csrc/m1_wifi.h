@@ -18,6 +18,9 @@
 
 void menu_wifi_init(void);
 void menu_wifi_exit(void);
+#ifdef M1_APP_WIFI_OFFENSIVE_ENABLE
+void menu_wifi_offensive_init(void);
+#endif
 
 void wifi_scan_ap(void);
 void wifi_survey_24g(void);
@@ -34,5 +37,14 @@ void wifi_disconnect(void);
 uint8_t wifi_sync_rtc(void);
 void wifi_sync_rtc_tool(void);
 #endif
+
+/* Offensive WiFi tools */
+void wifi_attack_list(void);
+void wifi_beacon_spam(void);
+void wifi_probe_sniff(void);
+void wifi_pmkid_capture(void);
+void wifi_karma_attack(void);
+void wifi_handshake_capture(void);
+void wifi_deauth_flood(void);
 
 #endif /* M1_WIFI_H_ */

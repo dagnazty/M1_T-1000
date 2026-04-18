@@ -143,6 +143,7 @@ static void nfc_extra_read_mfc(void);
 static void nfc_extra_read_ul(void);
 static void nfc_extra_unlock_slix(void);
 
+
 /* For each mode init/create/update/destroy/message prototype */
 static void nfc_read_gui_init(void);
 static void nfc_read_gui_create(uint8_t param);
@@ -4627,3 +4628,5 @@ void nfc_add_manually(void)
 		m1_message_box(&m1_u8g2, "Add Manually", "SD card error", " ", "BACK to return");
 	}
 }
+
+/* nfc_extra_boost_test() removed - test app deleted */

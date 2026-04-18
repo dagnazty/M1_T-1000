@@ -76,6 +76,7 @@ extern void assert_failed();
 #define M1_APP_FILE_IMPORT_ENABLE       /* Enable .sub/.nfc/.rfid file import */
 #define M1_APP_CRYPTO_ENABLE           /* Enable WiFi credential encryption */
 #define M1_APP_WIFI_CONNECT_ENABLE     /* Enable WiFi connect/saved networks/status */
+#define M1_APP_WIFI_OFFENSIVE_ENABLE    /* Enable offensive WiFi tools (deauth, beacon spam, etc.) */
 #define M1_APP_BADUSB_ENABLE           /* Enable BadUSB / USB HID keystroke injection */
 #define M1_APP_BADBT_ENABLE            /* Enable Bad-BT / BLE HID keystroke injection */
 #define M1_APP_BT_MANAGE_ENABLE        /* Enable BT device management & connect */

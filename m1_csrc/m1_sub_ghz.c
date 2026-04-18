@@ -1194,8 +1194,11 @@ static int subghz_record_kp_handler(void)
 					// Adjust the attack and decay times
 					SI446x_Change_Modem_OOK_PDTC(SUB_GHZ_433_92_NEW_PDTC);
 					sub_ghz_rx_init();
-					sub_ghz_rx_start();
+					/* Set record mode BEFORE enabling IC interrupt so the ISR
+					 * never runs with mode_flag=false (which would flood the
+					 * main queue with every pulse instead of every 512th). */
 					subghz_record_mode_flag = true;
+					sub_ghz_rx_start();
 					m1_uiView_display_update(SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE);
 				} // if ( !ret )
 				else
@@ -4415,10 +4418,15 @@ static uint8_t sub_ghz_rx_raw_save(bool header_init, bool last_data)
 {
 	char *prn_buffer;
 	uint32_t freq32;
-	uint16_t count, n_samples_to_rw, *pdata;
+	uint16_t count, n_samples_to_rw, n_read, *pdata;
 	char *sign_text[2] = {"+", ""};
 	uint8_t *pfillbuffer;
 	uint8_t sign;
+
+	/* Guard against missing buffers (low-memory boot where
+	 * sub_ghz_ring_buffers_init() failed). */
+	if ( subghz_sdcard_write_buffer==NULL || subghz_ring_read_buffer==NULL )
+		return 1;
 
 	prn_buffer = malloc(64);
 	if (prn_buffer == NULL)
@@ -4452,29 +4460,54 @@ static uint8_t sub_ghz_rx_raw_save(bool header_init, bool last_data)
 		if ( n_samples_to_rw > SUBGHZ_RAW_DATA_SAMPLES_TO_RW ) // This should never happen!
 			n_samples_to_rw = SUBGHZ_RAW_DATA_SAMPLES_TO_RW;
 	} // if ( last_data )
-	m1_ringbuffer_read(&subghz_rx_rawdata_rb, subghz_ring_read_buffer, n_samples_to_rw);
+	/* Use the actual slots read; ring buffer may have fewer than requested
+	 * (especially on last_data, or when mode_flag-race lost samples). */
+	n_read = m1_ringbuffer_read(&subghz_rx_rawdata_rb, subghz_ring_read_buffer, n_samples_to_rw);
+	if ( n_read==0 )
+	{
+		free(prn_buffer);
+		return 0; // Nothing to flush
+	}
+	n_samples_to_rw = n_read;
 	//sub_ghz_rx_start();
 	//m1_test_gpio_pull_low();
 	pdata = (uint16_t *)subghz_ring_read_buffer;
-	if ( n_samples_to_rw & 0x01 ) // Odd number of samples?
+	if ( (n_samples_to_rw & 0x01) && (n_samples_to_rw < SUBGHZ_RAW_DATA_SAMPLES_TO_RW) )
 	{
+		/* Append dummy only when there is a slot left in subghz_ring_read_buffer
+		 * (allocated for SUBGHZ_RAW_DATA_SAMPLES_TO_RW uint16_t slots). */
 		pdata[n_samples_to_rw] = INTERPACKET_GAP_MIN; // Extra dummy data
 		n_samples_to_rw++; // Make even number
 	}
 	sign = 0;
-	for (count=0; count<n_samples_to_rw; count++)
 	{
-		sprintf(prn_buffer, " %s%u", sign_text[sign], *pdata);
-		strcat(pfillbuffer, prn_buffer);
-		pdata++;
-		sign ^= 1;
+		/* Track write position explicitly so we cannot overflow pfillbuffer
+		 * (sized SUBGHZ_FORTMATTED_DATA_SAMPLES_TO_RW). Stop early with ellipsis
+		 * rather than corrupting heap on worst-case all-+65535 floods. */
+		size_t pos = strlen((char *)pfillbuffer);
+		const size_t cap = SUBGHZ_FORTMATTED_DATA_SAMPLES_TO_RW;
+		int need;
+		for (count=0; count<n_samples_to_rw; count++)
+		{
+			need = snprintf(prn_buffer, 64, " %s%u", sign_text[sign], *pdata);
+			if ( need < 0 )
+				break;
+			if ( pos + (size_t)need + 3 >= cap ) // reserve room for "\r\n\0"
+				break;
+			memcpy(pfillbuffer + pos, prn_buffer, need);
+			pos += need;
+			pdata++;
+			sign ^= 1;
+		}
+		pfillbuffer[pos++] = '\r';
+		pfillbuffer[pos++] = '\n';
+		pfillbuffer[pos] = '\0';
 	}
-	strcat(pfillbuffer, "\r\n");
 
-	m1_sdm_fill_buffer(pfillbuffer, strlen(pfillbuffer));
+	m1_sdm_fill_buffer(pfillbuffer, strlen((char *)pfillbuffer));
 
-	if ( prn_buffer!=NULL )
-		free(prn_buffer);
+	free(prn_buffer);
+	return 0;
 } // static uint8_t sub_ghz_rx_raw_save(bool header_init, bool last_data)
 
 

@@ -40,6 +40,7 @@ extern S_M1_Menu_t menu_Setting_Power_Info;
 extern S_M1_Menu_t menu_Setting_Power_Reboot;
 extern S_M1_Menu_t menu_Setting_Power_Off;
 extern S_M1_Menu_t menu_Settings_LCD_and_Notifications;
+extern S_M1_Menu_t menu_Settings_Backlight;
 extern S_M1_Menu_t menu_Settings_System;
 extern S_M1_Menu_t menu_Settings_About;
 extern S_M1_Menu_t menu_Setting_Firmware_Update;
@@ -66,8 +67,8 @@ static S_M1_Menu_t menu_Startup_Splash =
 
 static S_M1_Menu_t menu_System =
 {
-    "System", NULL, NULL, NULL, 6, 0, menu_m1_icon_setting, NULL,
-    {&menu_Settings_LCD_and_Notifications, &menu_Settings_System,
+    "System", NULL, NULL, NULL, 7, 0, menu_m1_icon_setting, NULL,
+    {&menu_Settings_Backlight, &menu_Settings_LCD_and_Notifications, &menu_Settings_System,
      &menu_Setting_Firmware_Update, &menu_Setting_ESP32,
      &menu_Settings_About, &menu_Startup_Splash}
 };

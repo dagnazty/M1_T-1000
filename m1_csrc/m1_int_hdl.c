@@ -746,6 +746,10 @@ void TIM1_CC_IRQHandler(void)
 		if ( true )
 #endif // #ifdef M1_APP_SUB_GHZ_RAW_DATA_RX_NOISE_FILTER_ENABLE
 		{
+			/* Skip ring-buffer insert if the buffer was never allocated
+			 * (sub_ghz_ring_buffers_init() can fail under low heap). */
+			if ( subghz_rx_rawdata_rb.pdata==NULL )
+				return;
 			m1_ringbuffer_insert(&subghz_rx_rawdata_rb, (uint8_t *)&cap_val);
 			pulse_counter++;
 			if ( pulse_counter >= SUBGHZ_RAW_DATA_SAMPLES_TO_RW )

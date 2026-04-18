@@ -22,7 +22,7 @@ endif()
 
 # Internal CMake target name and user-facing artifact basename
 set(CMAKE_PROJECT_NAME M1_T1000)
-set(M1_T1000_VERSION 0.1.0)
+set(M1_T1000_VERSION 0.1.1)
 set(M1_FIRMWARE_ARTIFACT_BASENAME M1_T-1000_v${M1_T1000_VERSION})
 
 # C3 fork revision — must match M1_C3_REVISION in m1_fw_update_bl.h

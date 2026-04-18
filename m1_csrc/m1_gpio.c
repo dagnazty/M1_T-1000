@@ -27,6 +27,15 @@
 #define THIS_LCD_MENU_TEXT_FRAME_FIRST_ROW_Y	1
 #define THIS_LCD_MENU_TEXT_ROW_SPACE			10
 
+/* Layout for the new 2-item scrollable menu */
+#define THIS_GPIO_WINDOW_SIZE   2
+#define THIS_GPIO_ROW_H         12
+#define THIS_GPIO_ROW_X         6
+#define THIS_GPIO_ROW_W         113
+#define THIS_GPIO_LIST_TOP_Y    13
+#define THIS_GPIO_SCROLLBAR_X   121
+#define THIS_GPIO_SCROLLBAR_W   5
+
 //************************** C O N S T A N T **********************************/
 
 const char *m1_ext_gpio_label[M1_EXT_GPIO_LIST_N] = {	"Power 3.3V",
@@ -336,74 +345,121 @@ void ext_power_3V_set(uint8_t set_mode)
 /******************************************************************************/
 void gpio_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
 {
-	uint8_t i, n_items;
-	uint8_t menu_text_y;
+	uint8_t n_items, row, top_row, bottom_row;
+	uint8_t row_y, row_text_y;
 	uint8_t prn_name[GUI_DISP_LINE_LEN_MAX + 1] = {0};
-	uint16_t msg_len, msg_id;
 
 	n_items = phmenu->num_submenu_items;
-	menu_text_y = 24;
+
+	/* Scroll window: keep sel_item visible inside a window of size
+	 * THIS_GPIO_WINDOW_SIZE (2). */
+	if (n_items <= THIS_GPIO_WINDOW_SIZE)
+		top_row = 0;
+	else if (sel_item == 0)
+		top_row = 0;
+	else if (sel_item >= n_items - 1)
+		top_row = n_items - THIS_GPIO_WINDOW_SIZE;
+	else
+		top_row = sel_item - (THIS_GPIO_WINDOW_SIZE - 1);
+
+	bottom_row = top_row + THIS_GPIO_WINDOW_SIZE;
+	if (bottom_row > n_items)
+		bottom_row = n_items;
 
 	/* Graphic work starts here */
-	m1_u8g2_firstpage(); // This call required for page drawing in mode 1
-    do
-    {
-    	m1_draw_header_bar(&m1_u8g2, "GPIO", NULL);
-    	m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 27);
-    	for (i=0; i<n_items; i++)
-    	{
-    		if ( i==sel_item )
-    		{
-    			u8g2_DrawBox(&m1_u8g2, 6, menu_text_y - 7, 114, 9);
-    			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG); // set to background color
-    			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_B);
-    			u8g2_DrawStr(&m1_u8g2, 10, menu_text_y, phmenu->submenu[i]->title);
-    			if ( i==0 ) // Index of GPIO Control
-    			{
-    		    	// Draw arrows left and right
-    		    	u8g2_DrawXBMP(&m1_u8g2, 98, menu_text_y - 7, 10, 10, arrowleft_10x10);
-    		    	u8g2_DrawXBMP(&m1_u8g2, 110, menu_text_y - 7, 10, 10, arrowright_10x10);
-    			}
-    			u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT); // return to text color
-    			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N); // return to default font
-    		}
-    		else
-    		{
-    			u8g2_DrawFrame(&m1_u8g2, 6, menu_text_y - 7, 114, 9);
-    			u8g2_DrawStr(&m1_u8g2, 10, menu_text_y, phmenu->submenu[i]->title);
-    		}
-    		menu_text_y += THIS_LCD_MENU_TEXT_ROW_SPACE;
-    	} // for (i=0; i<n_items; i++)
+	m1_u8g2_firstpage();
+	do
+	{
+		/* Shared header (battery + SD) */
+		m1_draw_header_bar(&m1_u8g2, "GPIO", NULL);
 
-    	m1_draw_content_frame(&m1_u8g2, 2, 43, 124, 19);
+		/* Scrollable 2-row list */
+		u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
+		for (row = top_row; row < bottom_row; row++)
+		{
+			row_y = THIS_GPIO_LIST_TOP_Y + ((row - top_row) * THIS_GPIO_ROW_H);
+			row_text_y = row_y + 9;
 
-    	switch ( sel_item )
-    	{
-    		case 0: // GPIO
-    			sprintf(prn_name, "%s: %s", m1_ext_gpio_label[m1_ext_gpio_id], (m1_ext_gpio_stat[m1_ext_gpio_id]==1)?"ON":"OFF");
-    			m1_draw_text(&m1_u8g2, 8, 55, 114, prn_name, TEXT_ALIGN_LEFT);
-    			break;
+			if (row == sel_item)
+			{
+				u8g2_DrawBox(&m1_u8g2, THIS_GPIO_ROW_X, row_y,
+				             THIS_GPIO_ROW_W, THIS_GPIO_ROW_H - 1);
+				u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
+				u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_B);
+				u8g2_DrawStr(&m1_u8g2, THIS_GPIO_ROW_X + 4, row_text_y,
+				             phmenu->submenu[row]->title);
+				if (row == 0) // GPIO Control — show pin-cycle arrows on the row
+				{
+					u8g2_DrawXBMP(&m1_u8g2, THIS_GPIO_ROW_X + 78, row_y + 1,
+					              10, 10, arrowleft_10x10);
+					u8g2_DrawXBMP(&m1_u8g2, THIS_GPIO_ROW_X + 91, row_y + 1,
+					              10, 10, arrowright_10x10);
+				}
+				u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+				u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
+			}
+			else
+			{
+				u8g2_DrawFrame(&m1_u8g2, THIS_GPIO_ROW_X, row_y,
+				               THIS_GPIO_ROW_W, THIS_GPIO_ROW_H - 1);
+				u8g2_DrawStr(&m1_u8g2, THIS_GPIO_ROW_X + 4, row_text_y,
+				             phmenu->submenu[row]->title);
+			}
+		}
 
-    		case 1: // Power 3.3V
-    			sprintf(prn_name, "%s: %s", m1_ext_gpio_label[0], (m1_ext_gpio_stat[0]==1)?"ON":"OFF");
-    	    	m1_draw_text(&m1_u8g2, 8, 55, 114, prn_name, TEXT_ALIGN_LEFT);
-    			break;
+		/* Scrollbar (only when there is more to scroll) */
+		if (n_items > THIS_GPIO_WINDOW_SIZE)
+		{
+			uint8_t track_y = THIS_GPIO_LIST_TOP_Y;
+			uint8_t track_h = (THIS_GPIO_WINDOW_SIZE * THIS_GPIO_ROW_H) - 1;
+			uint8_t handle_h, handle_y;
+			u8g2_DrawFrame(&m1_u8g2, THIS_GPIO_SCROLLBAR_X, track_y,
+			               THIS_GPIO_SCROLLBAR_W, track_h);
+			handle_h = (uint8_t)((track_h * THIS_GPIO_WINDOW_SIZE) / n_items);
+			if (handle_h < 4) handle_h = 4;
+			handle_y = track_y +
+			           (uint8_t)(((track_h - handle_h) * top_row) /
+			                     (n_items - THIS_GPIO_WINDOW_SIZE));
+			u8g2_DrawBox(&m1_u8g2, THIS_GPIO_SCROLLBAR_X + 1, handle_y + 1,
+			             THIS_GPIO_SCROLLBAR_W - 2, handle_h - 2);
+		}
 
-    		case 2: // Power 5.0V
-    			sprintf(prn_name, "%s: %s", m1_ext_gpio_label[1], (m1_ext_gpio_stat[1]==1)?"ON":"OFF");
-    	    	m1_draw_text(&m1_u8g2, 8, 55, 114, prn_name, TEXT_ALIGN_LEFT);
-    			break;
+		/* Detail frame for currently-selected row */
+		m1_draw_content_frame(&m1_u8g2, 2, 38, 124, 13);
 
-    		case 3:
-    	    	m1_draw_text(&m1_u8g2, 8, 55, 114, "Please update firmware!", TEXT_ALIGN_LEFT);
-    			break;
+		switch (sel_item)
+		{
+			case 0: // GPIO (cycled pin state)
+				sprintf(prn_name, "%s: %s",
+				        m1_ext_gpio_label[m1_ext_gpio_id],
+				        (m1_ext_gpio_stat[m1_ext_gpio_id] == 1) ? "ON" : "OFF");
+				m1_draw_text(&m1_u8g2, 6, 47, 116, prn_name, TEXT_ALIGN_LEFT);
+				break;
 
-    		default: // Unknown selection
-    			break;
-    	} // switch ( sel_item )
-    	m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Toggle", arrowright_8x8);
-    } while (m1_u8g2_nextpage());
+			case 1: // Power 3.3V
+				sprintf(prn_name, "%s: %s", m1_ext_gpio_label[0],
+				        (m1_ext_gpio_stat[0] == 1) ? "ON" : "OFF");
+				m1_draw_text(&m1_u8g2, 6, 47, 116, prn_name, TEXT_ALIGN_LEFT);
+				break;
 
+			case 2: // Power 5.0V
+				sprintf(prn_name, "%s: %s", m1_ext_gpio_label[1],
+				        (m1_ext_gpio_stat[1] == 1) ? "ON" : "OFF");
+				m1_draw_text(&m1_u8g2, 6, 47, 116, prn_name, TEXT_ALIGN_LEFT);
+				break;
+
+			case 3:
+				m1_draw_text(&m1_u8g2, 6, 47, 116, "Please update firmware!",
+				             TEXT_ALIGN_LEFT);
+				break;
+
+			default:
+				break;
+		}
+
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Toggle",
+		                   arrowright_8x8);
+	} while (m1_u8g2_nextpage());
 } // void gpio_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
 
 

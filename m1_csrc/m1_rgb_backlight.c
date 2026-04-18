@@ -55,6 +55,7 @@ static rgb_bl_mode_t  g_rgb_mode  = RGB_MODE_WHITE;
 static rgb_bl_effect_t g_rgb_effect = RGB_EFFECT_STATIC;
 static uint8_t        g_rgb_brightness = 128;
 static bool           g_rgb_on   = false;
+static bool           g_rgb_available = false; /* set true at boot if RGB mod detected */
 
 /* Predefined colors per mode */
 static const rgb_color_t rgb_mode_colors[RGB_MODE_COUNT] = {
@@ -265,8 +266,43 @@ static void rgb_bl_apply_mode_colors(void)
 /* Public API                                                                 */
 /*============================================================================*/
 
+uint8_t rgb_bl_detect(void)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    /* Enable GPIOD clock */
+    __HAL_RCC_GPIOD_CLK_ENABLE();
+
+    /* Configure PD3 as input with pull-down */
+    GPIO_InitStruct.Pin   = RGB_BL_PIN;
+    GPIO_InitStruct.Mode  = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pull  = GPIO_PULLDOWN;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(RGB_BL_PORT, &GPIO_InitStruct);
+
+    /* Wait for pull to settle */
+    HAL_Delay(1);
+
+    /* Read the pin — SK6805 data line floats high when not driven,
+     * so a high read with pull-down suggests the NeoPixel chain is present.
+     * A bare pad reads low. */
+    GPIO_PinState state = HAL_GPIO_ReadPin(RGB_BL_PORT, RGB_BL_PIN);
+
+    /* Revert pin to analog (safe default) */
+    GPIO_InitStruct.Mode  = GPIO_MODE_ANALOG;
+    GPIO_InitStruct.Pull  = GPIO_PULLDOWN;
+    HAL_GPIO_Init(RGB_BL_PORT, &GPIO_InitStruct);
+
+    return (state == GPIO_PIN_SET) ? 1U : 0U;
+}
+
+uint8_t rgb_bl_is_available(void) { return g_rgb_available ? 1U : 0U; }
+
 void rgb_bl_init(void)
 {
+    /* Mark as available so the system knows RGB mod is present */
+    g_rgb_available = true;
+
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
     /* Enable GPIOD clock */
@@ -295,6 +331,7 @@ void rgb_bl_init(void)
 void rgb_bl_deinit(void)
 {
     rgb_bl_off();
+    g_rgb_available = false;
     /* Revert PD3 to analog (safe default) */
     GPIO_InitTypeDef GPIO_InitStruct = {0};
     GPIO_InitStruct.Pin   = RGB_BL_PIN;
@@ -409,4 +446,36 @@ const char *rgb_bl_mode_name(rgb_bl_mode_t mode)
 const char *rgb_bl_effect_name(rgb_bl_effect_t effect)
 {
     return (effect < RGB_EFFECT_COUNT) ? rgb_effect_names[effect] : "?";
+}
+
+/*============================================================================*/
+/* Unified backlight API — routes to LP5814 or RGB mod automatically          */
+/*============================================================================*/
+
+/* Forward declaration from m1_lp5814.h */
+extern void lp5814_backlight_on(uint8_t brightness);
+
+void m1_backlight_on(uint8_t brightness)
+{
+    extern uint8_t m1_backlight_type;
+    if (m1_backlight_type == 1)
+    {
+        if (brightness == 0)
+            rgb_bl_off();
+        else
+        {
+            if (!g_rgb_available) rgb_bl_init();
+            rgb_bl_on();
+            rgb_bl_set_brightness(brightness);
+        }
+    }
+    else
+    {
+        lp5814_backlight_on(brightness);
+    }
+}
+
+void m1_backlight_off(void)
+{
+    m1_backlight_on(0);
 }

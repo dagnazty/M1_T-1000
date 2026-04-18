@@ -45,6 +45,7 @@
 #include "nfc_poller.h"
 #include "utils.h"
 #include "rfal_nfc.h"
+#include "rfal_rf.h"
 #include "rfal_t2t.h"
 #include "rfal_isoDep.h"
 #include "rfal_nfcv.h"
@@ -1530,7 +1531,7 @@ static void m1_st25tb_read(const rfalNfcDevice *dev)
         nfc_ctx_set_dump(blockSize, maxSeen + 1, 0,
                          g_nfc_dump_buf, g_nfc_valid_bits,
                          maxSeen, true);
-        platformLog("[ST25TB] dump done: %u blocks\r\n", maxSeen + 1);
+        platformLog("[ST25TB] dump done: %lu blocks\r\n", maxSeen + 1);
     }
 }
 
@@ -1563,3 +1564,1047 @@ ReturnCode nfc_poller_get_version(uint8_t *rxBuf, uint16_t rxBufLen, uint16_t *r
 {
     return GetVersion_Ntag(rxBuf, rxBufLen, rcvLen);
 }
+
+/*============================================================================*/
+/**
+ * @brief Test function: Enable continuous 13.56 MHz carrier (sine wave)
+ * 
+ * This function enables the ST25R3916 transmitter to output a pure
+ * 13.56 MHz carrier (sine wave) without modulation. This can be used
+ * as a "booster" to power up NFC tags from greater distances.
+ * 
+ * Based on analysis of Flipper Zero's NFC implementation which uses
+ * similar techniques for improved range.
+ * 
+ * @param duration_ms Duration to transmit carrier (0 = infinite until stopped)
+ * @return true if successful, false if error
+ */
+/*============================================================================*/
+bool test_nfc_continuous_carrier(uint32_t duration_ms)
+{
+    ReturnCode err = RFAL_ERR_NONE;
+    
+    platformLog("[NFC] Enabling continuous carrier (sine wave)...\r\n");
+    
+    /* 1. First ensure RFAL is initialized */
+    /* Note: You'll need to check your NFC initialization state */
+    /* For now, we assume NFC is initialized */
+    
+    /* 2. Deactivate any current NFC activity */
+    rfalNfcDeactivate(RFAL_NFC_DEACTIVATE_IDLE);
+    
+    /* 3. Turn off field if it's on */
+    rfalFieldOff();
+    
+    /* 4. Configure ST25R3916 for continuous carrier transmission */
+    
+    /* Set mode to NFC (likely appropriate for continuous carrier) */
+    err = st25r3916WriteRegister(ST25R3916_REG_MODE, ST25R3916_REG_MODE_om_nfc);
+    if (err != RFAL_ERR_NONE) {
+        platformLog("[NFC] ERROR: Failed to set mode (err=%d)\r\n", err);
+        return false;
+    }
+    
+    /* Configure TX driver for MAXIMUM POWER! */
+    /* d_res = 0x0 (lowest resistance = highest power output) */
+    /* am_mod = 40% modulation (MAXIMUM available for ST25R3916!) */
+    /* WARNING: This may exceed regulatory limits in some regions */
+    uint8_t tx_driver = (ST25R3916_REG_TX_DRIVER_am_mod_40percent) | 
+                       (0x0 << ST25R3916_REG_TX_DRIVER_d_res_shift);
+    
+    err = st25r3916WriteRegister(ST25R3916_REG_TX_DRIVER, tx_driver);
+    if (err != RFAL_ERR_NONE) {
+        platformLog("[NFC] ERROR: Failed to configure TX driver (err=%d)\r\n", err);
+        return false;
+    }
+    
+    /* Optional: Set extended field-on guard time */
+    err = st25r3916WriteRegister(ST25R3916_REG_FIELD_ON_GT, 0xFF);
+    if (err != RFAL_ERR_NONE) {
+        platformLog("[NFC] WARNING: Failed to set field-on GT (err=%d)\r\n", err);
+        /* Continue anyway */
+    }
+    
+    /* 5. Enable transmitter only (no receiver, no data) */
+    uint8_t op_control = ST25R3916_REG_OP_CONTROL_tx_en | ST25R3916_REG_OP_CONTROL_en;
+    err = st25r3916WriteRegister(ST25R3916_REG_OP_CONTROL, op_control);
+    if (err != RFAL_ERR_NONE) {
+        platformLog("[NFC] ERROR: Failed to enable transmitter (err=%d)\r\n", err);
+        return false;
+    }
+    
+    platformLog("[NFC] Continuous carrier ENABLED\r\n");
+    platformLog("[NFC] Mode: 0x%02X, TX Driver: 0x%02X (5%% mod), OP Control: 0x%02X\r\n",
+               ST25R3916_REG_MODE_om_nfc, tx_driver, op_control);
+    
+    /* 6. If duration specified, wait then turn off */
+    if (duration_ms > 0) {
+        platformLog("[NFC] Transmitting for %lu ms...\r\n", duration_ms);
+        HAL_Delay(duration_ms);
+        
+        /* Turn off transmitter */
+        test_nfc_stop_continuous_carrier();
+        platformLog("[NFC] Continuous carrier DISABLED after %lu ms\r\n", duration_ms);
+    } else {
+        platformLog("[NFC] Continuous carrier ON (infinite duration)\r\n");
+        platformLog("[NFC] Call test_nfc_stop_continuous_carrier() to stop\r\n");
+    }
+    
+    return true;
+}
+
+/*============================================================================*/
+/**
+ * @brief Stop continuous carrier transmission
+ * 
+ * Disables the transmitter and restores normal NFC operation.
+ * 
+ * @return true if successful, false if error
+ */
+/*============================================================================*/
+bool test_nfc_stop_continuous_carrier(void)
+{
+    platformLog("[NFC] Stopping continuous carrier...\r\n");
+    
+    /* Disable transmitter */
+    ReturnCode err = st25r3916WriteRegister(ST25R3916_REG_OP_CONTROL, 0x00);
+    if (err != RFAL_ERR_NONE) {
+        platformLog("[NFC] ERROR: Failed to disable transmitter (err=%d)\r\n", err);
+        return false;
+    }
+    
+    /* Optional: Restore default mode */
+    err = st25r3916WriteRegister(ST25R3916_REG_MODE, ST25R3916_REG_MODE_om_iso14443a);
+    if (err != RFAL_ERR_NONE) {
+        platformLog("[NFC] WARNING: Failed to restore mode (err=%d)\r\n", err);
+    }
+    
+    platformLog("[NFC] Continuous carrier STOPPED\r\n");
+    return true;
+}
+
+/*============================================================================*/
+/**
+ * @brief Test function: Boosted NFC read with carrier pre-activation
+ * 
+ * This function demonstrates the "boosting" technique:
+ * 1. Transmit continuous carrier to wake up distant tags
+ * 2. Perform normal NFC discovery/read
+ * 3. Compare results with/without boosting
+ * 
+ * Note: This is a simplified version. You'll need to adapt it to your
+ * specific NFC initialization and state management.
+ * 
+ * @param boost_duration_ms How long to transmit carrier before reading
+ * @return true if tag was detected, false otherwise
+ */
+/*============================================================================*/
+/**
+ * @brief MAX POWER continuous carrier transmission
+ * 
+ * Uses maximum modulation (82%) and minimum driver resistance
+ * for the STRONGEST possible sinewave output.
+ * WARNING: May exceed regulatory limits!
+ * 
+ * @param duration_ms How long to transmit carrier
+ * @return true if successful
+ */
+/*============================================================================*/
+bool test_nfc_max_power_carrier(uint32_t duration_ms)
+{
+    ReturnCode err = RFAL_ERR_NONE;
+    
+    platformLog("[NFC] ABSOLUTE MAX POWER CARRIER! (GAIN CONTROL + EVERYTHING!)\r\n");
+    
+    /* 1. First ensure RFAL is initialized */
+    /* Note: You'll need to check your NFC initialization state */
+    /* For now, we assume NFC is initialized */
+    
+    /* 2. Deactivate any current NFC activity */
+    rfalNfcDeactivate(RFAL_NFC_DEACTIVATE_IDLE);
+    
+    /* 3. Turn off field if it's on */
+    rfalFieldOff();
+    
+    /* 4. Configure ST25R3916 for ABSOLUTE MAX POWER continuous carrier transmission */
+    err = st25r3916WriteRegister(ST25R3916_REG_MODE, ST25R3916_REG_MODE_om_nfc);
+    if (err != RFAL_ERR_NONE) {
+        platformLog("[NFC] ERROR: Failed to set mode (err=%d)\r\n", err);
+        return false;
+    }
+    
+    /* Configure TX driver for MAXIMUM POWER! */
+    /* d_res = 0x0 (lowest resistance = highest power output) */
+    /* am_mod = 40%% modulation (MAX for ST25R3916) */
+    uint8_t tx_driver = (ST25R3916_REG_TX_DRIVER_am_mod_40percent) | 
+                       (0x0 << ST25R3916_REG_TX_DRIVER_d_res_shift);
+    
+    err = st25r3916WriteRegister(ST25R3916_REG_TX_DRIVER, tx_driver);
+    if (err != RFAL_ERR_NONE) {
+        platformLog("[NFC] ERROR: Failed to configure TX driver (err=%d)\r\n", err);
+        return false;
+    }
+    
+    /* GAIN REDUCTION IS READ-ONLY - CAN'T CHANGE IT */
+    /* The chip manages gain reduction automatically */
+    
+    /* Set antenna tuning to default (0x82) - 0xFF didn't help */
+    err = st25r3916WriteRegister(ST25R3916_REG_ANT_TUNE_A, 0x82);
+    if (err != RFAL_ERR_NONE) {
+        platformLog("[NFC] WARNING: Failed to set ANT_TUNE_A (err=%d)\r\n", err);
+    }
+    
+    err = st25r3916WriteRegister(ST25R3916_REG_ANT_TUNE_B, 0x82);
+    if (err != RFAL_ERR_NONE) {
+        platformLog("[NFC] WARNING: Failed to set ANT_TUNE_B (err=%d)\r\n", err);
+    }
+    
+    /* Optional: Set extended field-on guard time */
+    err = st25r3916WriteRegister(ST25R3916_REG_FIELD_ON_GT, 0xFF);
+    if (err != RFAL_ERR_NONE) {
+        platformLog("[NFC] WARNING: Failed to set field-on GT (err=%d)\r\n", err);
+        /* Continue anyway */
+    }
+    
+    /* 5. Enable transmitter only (no receiver, no data) */
+    uint8_t op_control = ST25R3916_REG_OP_CONTROL_tx_en | ST25R3916_REG_OP_CONTROL_en;
+    
+    err = st25r3916WriteRegister(ST25R3916_REG_OP_CONTROL, op_control);
+    if (err != RFAL_ERR_NONE) {
+        platformLog("[NFC] ERROR: Failed to enable transmitter (err=%d)\r\n", err);
+        return false;
+    }
+    
+    platformLog("[NFC] ABSOLUTE MAX POWER carrier ENABLED!\r\n");
+    platformLog("[NFC] Mode: NFC, TX Driver: 40%% mod + min res, GAIN REDUCTION: DISABLED\r\n");
+    
+    /* 6. If duration specified, wait then turn off */
+    if (duration_ms > 0) {
+        platformLog("[NFC] Transmitting for %lu ms...\r\n", duration_ms);
+        HAL_Delay(duration_ms);
+        
+        /* Turn off transmitter */
+        test_nfc_stop_continuous_carrier();
+        platformLog("[NFC] ABSOLUTE MAX POWER carrier DISABLED after %lu ms\r\n", duration_ms);
+    } else {
+        platformLog("[NFC] ABSOLUTE MAX POWER carrier ON (infinite duration)\r\n");
+        platformLog("[NFC] Call test_nfc_stop_continuous_carrier() to stop\r\n");
+    }
+    
+    return true;
+}
+
+/*============================================================================*/
+bool test_nfc_boosted_read(uint32_t boost_duration_ms)
+{
+    platformLog("[NFC] Starting boosted read test (boost: %lu ms)...\r\n", boost_duration_ms);
+    
+    /* 1. Enable continuous carrier to wake up tags */
+    if (!test_nfc_continuous_carrier(boost_duration_ms)) {
+        platformLog("[NFC] ERROR: Failed to enable carrier\r\n");
+        return false;
+    }
+    
+    /* 2. Small delay after carrier stops */
+    HAL_Delay(10);
+    
+    /* 3. Perform NFC scan */
+    platformLog("[NFC] Scanning for tags after boost...\r\n");
+    
+    nfc_scan_result_t result;
+    memset(&result, 0, sizeof(result));
+    
+    // Use long range scan with the specified boost duration
+    // (Even though we already boosted, this will try to read)
+    bool success = nfc_long_range_scan(&result, boost_duration_ms);
+    
+    if (success) {
+        platformLog("[NFC] Boosted read SUCCESS!\r\n");
+        platformLog("[NFC]   Boost: %lu ms\r\n", result.boost_duration_ms);
+        platformLog("[NFC]   RSSI: %d dBm\r\n", result.rssi);
+        platformLog("[NFC]   Distance: %.1f cm\r\n", result.estimated_distance_cm);
+        platformLog("[NFC]   Read time: %lu ms\r\n", result.read_time_ms);
+        
+        if (result.uid_len > 0) {
+            platformLog("[NFC]   UID: ");
+            for (uint8_t i = 0; i < result.uid_len; i++) {
+                platformLog("%02X", result.uid[i]);
+            }
+            platformLog("\r\n");
+        }
+        
+        return true;
+    } else {
+        platformLog("[NFC] Boosted read: No tag detected\r\n");
+        return false;
+    }
+}
+
+/*============================================================================*/
+/**
+ * @brief NFC scan modes
+ */
+/*============================================================================*/
+typedef enum {
+    NFC_SCAN_FAST,      // Quick scan for nearby tags
+    NFC_SCAN_NORMAL,    // Standard scan
+    NFC_SCAN_LONG,      // Long-range scan with boosting
+    NFC_SCAN_ADAPTIVE   // Automatically adapts based on results
+} nfc_scan_mode_t;
+
+
+
+/*============================================================================*/
+/**
+ * @brief Enhanced carrier boosting with pulsing
+ * 
+ * Pulsed carrier can be more effective than continuous carrier
+ * for waking distant tags while being more power-efficient.
+ * 
+ * @param total_ms Total transmission time
+ * @param pulse_on_ms How long carrier is ON each pulse
+ * @param pulse_off_ms How long carrier is OFF between pulses
+ * @return true if successful
+ */
+/*============================================================================*/
+bool nfc_pulsed_carrier(uint32_t total_ms, uint32_t pulse_on_ms, uint32_t pulse_off_ms)
+{
+    if (pulse_on_ms == 0 || total_ms == 0) {
+        return false;
+    }
+    
+    platformLog("[NFC] Pulsed carrier: ON=%lums, OFF=%lums, Total=%lums\r\n",
+               pulse_on_ms, pulse_off_ms, total_ms);
+    
+    uint32_t start_time = HAL_GetTick();
+    uint32_t elapsed = 0;
+    bool pulse_state = true;
+    uint32_t pulse_start = start_time;
+    
+    while (elapsed < total_ms) {
+        if (pulse_state) {
+            // Carrier ON
+            if (elapsed == 0 || (HAL_GetTick() - pulse_start) >= pulse_on_ms) {
+                // Start or continue carrier
+                if (!test_nfc_continuous_carrier(0)) { // Infinite carrier
+                    return false;
+                }
+                pulse_state = false;
+                pulse_start = HAL_GetTick();
+            }
+        } else {
+            // Carrier OFF
+            if ((HAL_GetTick() - pulse_start) >= pulse_off_ms) {
+                test_nfc_stop_continuous_carrier();
+                pulse_state = true;
+                pulse_start = HAL_GetTick();
+            }
+        }
+        
+        elapsed = HAL_GetTick() - start_time;
+    }
+    
+    // Ensure carrier is off
+    test_nfc_stop_continuous_carrier();
+    
+    platformLog("[NFC] Pulsed carrier complete\r\n");
+    return true;
+}
+
+/*============================================================================*/
+/**
+ * @brief Get RSSI (Received Signal Strength Indicator)
+ * 
+ * RSSI can be used to estimate distance to tag.
+ * Higher (less negative) RSSI = closer tag.
+ * 
+ * @return RSSI value (typically negative dBm)
+ */
+/*============================================================================*/
+int16_t nfc_get_rssi(void)
+{
+    uint8_t rssi_reg = 0;
+    ReturnCode err = st25r3916ReadRegister(ST25R3916_REG_RSSI_RESULT, &rssi_reg);
+    
+    if (err != RFAL_ERR_NONE) {
+        platformLog("[NFC] Failed to read RSSI: %d\r\n", err);
+        return -100; // Error value
+    }
+    
+    // RSSI register: signed 8-bit value in dBm
+    int16_t rssi = (int8_t)rssi_reg;
+    
+    platformLog("[NFC] RSSI: %d dBm\r\n", rssi);
+    return rssi;
+}
+
+/*============================================================================*/
+/**
+ * @brief Estimate distance from RSSI
+ * 
+ * This is a simplified estimation. For accurate distance
+ * measurement, you need to calibrate with your specific
+ * antenna and environment.
+ * 
+ * @param rssi RSSI value in dBm
+ * @return Estimated distance in centimeters
+ */
+/*============================================================================*/
+float nfc_estimate_distance_from_rssi(int16_t rssi)
+{
+    // Calibration values - adjust based on your hardware!
+    // These are example values for typical NFC antenna
+    
+    if (rssi > -30) return 1.0f;   // Very close (~1cm)
+    if (rssi > -40) return 2.0f;   // Close (~2cm)
+    if (rssi > -50) return 5.0f;   // Near (~5cm)
+    if (rssi > -60) return 10.0f;  // Medium (~10cm)
+    if (rssi > -70) return 20.0f;  // Far (~20cm)
+    if (rssi > -80) return 30.0f;  // Very far (~30cm)
+    
+    return 50.0f; // Maximum range (~50cm)
+}
+
+/*============================================================================*/
+/**
+ * @brief Optimize receiver for weak signals
+ * 
+ * Configures ST25R3916 for maximum sensitivity
+ * to detect distant or weak tags.
+ */
+/*============================================================================*/
+void nfc_optimize_receiver(void)
+{
+    platformLog("[NFC] Optimizing receiver for weak signals...\r\n");
+    
+    // Configure receiver for maximum sensitivity
+    // Use lower bandwidth filter for better noise immunity
+    st25r3916WriteRegister(ST25R3916_REG_RX_CONF1, 
+                          ST25R3916_REG_RX_CONF1_lp_300khz);  // 300kHz low-pass filter
+    
+    // Lower field detection thresholds for weak signals
+    st25r3916WriteRegister(ST25R3916_REG_FIELD_THRESHOLD_ACTV, 0x10);   // Lower activation threshold
+    st25r3916WriteRegister(ST25R3916_REG_FIELD_THRESHOLD_DEACTV, 0x08); // Lower deactivation threshold
+    
+    // Configure RX_CONF2 for better weak signal reception
+    st25r3916WriteRegister(ST25R3916_REG_RX_CONF2, 0x00);  // Default settings
+    
+    // Configure RX_CONF3 for analog front-end
+    st25r3916WriteRegister(ST25R3916_REG_RX_CONF3, 0x00);  // Default settings
+    
+    // Configure RX_CONF4
+    st25r3916WriteRegister(ST25R3916_REG_RX_CONF4, 0x00);  // Default settings
+    
+    platformLog("[NFC] Receiver optimized for weak signals\r\n");
+}
+
+/*============================================================================*/
+/**
+ * @brief Fast NFC scan for nearby tags
+ * 
+ * Quick scan without boosting for maximum speed.
+ * Ideal for tags within normal reading distance.
+ * 
+ * @param result Pointer to store scan results
+ * @return true if tag detected
+ */
+/*============================================================================*/
+bool nfc_fast_scan(nfc_scan_result_t *result)
+{
+    if (!result) return false;
+    
+    memset(result, 0, sizeof(nfc_scan_result_t));
+    result->scan_attempts = 1;
+    result->boost_duration_ms = 0;
+    
+    platformLog("[NFC] Starting fast scan...\r\n");
+    
+    uint32_t start_time = HAL_GetTick();
+    
+    // Quick NFC initialization
+    ReadIni();
+    
+    // Fast discovery attempt
+    rfalNfcDiscoverParam discParam;
+    memset(&discParam, 0, sizeof(discParam));
+    discParam.devLimit = 1;
+    discParam.techs2Find = RFAL_NFC_POLL_TECH_A;
+    
+    ReturnCode err = rfalNfcDiscover(&discParam);
+    result->read_time_ms = HAL_GetTick() - start_time;
+    
+    if (err == RFAL_ERR_NONE) {
+        // DISCOVERY SUCCESS - but we need to validate it's a real tag
+        
+        // Wait a bit for activation
+        HAL_Delay(5);
+        
+        // Check if a device is actually activated (not just noise)
+        if (!rfalNfcIsDevActivated(rfalNfcGetState())) {
+            platformLog("[NFC] Fast scan: Discovery succeeded but no device activated (likely noise)\r\n");
+            return false;
+        }
+        
+        // Try to get the active device
+        rfalNfcDevice *nfcDevice = NULL;
+        rfalNfcGetActiveDevice(&nfcDevice);
+        
+        if (!nfcDevice) {
+            platformLog("[NFC] Fast scan: No active device found (false positive)\r\n");
+            return false;
+        }
+        
+        // Validate it has a valid UID (not all zeros or garbage)
+        bool valid_uid = false;
+        if (nfcDevice->nfcidLen > 0) {
+            // Check UID is not all zeros
+            valid_uid = true;
+            for (uint8_t i = 0; i < nfcDevice->nfcidLen; i++) {
+                if (nfcDevice->nfcid[i] != 0x00) {
+                    valid_uid = true;
+                    break;
+                }
+            }
+        }
+        
+        if (!valid_uid) {
+            platformLog("[NFC] Fast scan: Invalid UID (all zeros)\r\n");
+            return false;
+        }
+        
+        // Store UID in result
+        result->uid_len = (nfcDevice->nfcidLen > 10) ? 10 : nfcDevice->nfcidLen;
+        memcpy(result->uid, nfcDevice->nfcid, result->uid_len);
+        
+        // Determine tag type
+        if (nfcDevice->type == RFAL_NFC_LISTEN_TYPE_NFCA) {
+            result->tag_type = 1; // NFC-A
+        } else if (nfcDevice->type == RFAL_NFC_LISTEN_TYPE_NFCB) {
+            result->tag_type = 2; // NFC-B
+        } else if (nfcDevice->type == RFAL_NFC_LISTEN_TYPE_NFCF) {
+            result->tag_type = 3; // NFC-F
+        } else {
+            result->tag_type = 0; // Unknown
+        }
+        
+        result->detected = true;
+        result->rssi = nfc_get_rssi();
+        result->estimated_distance_cm = nfc_estimate_distance_from_rssi(result->rssi);
+        
+        platformLog("[NFC] Fast scan VALID TAG: %lums, RSSI: %d, Dist: %.1fcm, UID: ",
+                   result->read_time_ms, result->rssi, result->estimated_distance_cm);
+        
+        for (uint8_t i = 0; i < result->uid_len; i++) {
+            platformLog("%02X", result->uid[i]);
+        }
+        platformLog("\r\n");
+        
+        // Deactivate the tag
+        rfalNfcDeactivate(RFAL_NFC_DEACTIVATE_IDLE);
+        
+        return true;
+    }
+    
+    platformLog("[NFC] Fast scan failed: %d\r\n", err);
+    return false;
+}
+
+/*============================================================================*/
+/**
+ * @brief Long-range NFC scan with carrier boosting
+ * 
+ * Uses carrier boosting to wake distant tags.
+ * Slower but has much greater range.
+ * 
+ * @param result Pointer to store scan results
+ * @param boost_ms How long to boost carrier before scanning
+ * @return true if tag detected
+ */
+/*============================================================================*/
+bool nfc_long_range_scan(nfc_scan_result_t *result, uint32_t boost_ms)
+{
+    if (!result) return false;
+    
+    memset(result, 0, sizeof(nfc_scan_result_t));
+    result->scan_attempts = 1;
+    result->boost_duration_ms = boost_ms;
+    
+    platformLog("[NFC] Starting long-range scan (%lums boost)...\r\n", boost_ms);
+    
+    // Phase 1: Boost carrier to wake distant tags
+    if (boost_ms > 0) {
+        if (!test_nfc_continuous_carrier(boost_ms)) {
+            platformLog("[NFC] Failed to boost carrier\r\n");
+            return false;
+        }
+        HAL_Delay(10); // Small gap
+    }
+    
+    uint32_t start_time = HAL_GetTick();
+    
+    // Re-initialize NFC after boosting
+    ReadIni();
+    
+    // Optimize receiver for weak signals
+    nfc_optimize_receiver();
+    
+    // Discovery attempt
+    rfalNfcDiscoverParam discParam;
+    memset(&discParam, 0, sizeof(discParam));
+    discParam.devLimit = 1;
+    discParam.techs2Find = RFAL_NFC_POLL_TECH_A;
+    
+    ReturnCode err = rfalNfcDiscover(&discParam);
+    result->read_time_ms = HAL_GetTick() - start_time;
+    
+    if (err == RFAL_ERR_NONE) {
+        // DISCOVERY SUCCESS - validate it's a real tag
+        
+        // Wait a bit for activation
+        HAL_Delay(5);
+        
+        // Check if a device is actually activated
+        if (!rfalNfcIsDevActivated(rfalNfcGetState())) {
+            platformLog("[NFC] Long-range scan: Discovery succeeded but no device activated (likely noise)\r\n");
+            return false;
+        }
+        
+        // Try to get the active device
+        rfalNfcDevice *nfcDevice = NULL;
+        rfalNfcGetActiveDevice(&nfcDevice);
+        
+        if (!nfcDevice) {
+            platformLog("[NFC] Long-range scan: No active device found (false positive)\r\n");
+            return false;
+        }
+        
+        // Validate it has a valid UID
+        bool valid_uid = false;
+        if (nfcDevice->nfcidLen > 0) {
+            // Check UID is not all zeros
+            valid_uid = false;
+            for (uint8_t i = 0; i < nfcDevice->nfcidLen; i++) {
+                if (nfcDevice->nfcid[i] != 0x00) {
+                    valid_uid = true;
+                    break;
+                }
+            }
+        }
+        
+        if (!valid_uid) {
+            platformLog("[NFC] Long-range scan: Invalid UID (all zeros)\r\n");
+            return false;
+        }
+        
+        // Store UID in result
+        result->uid_len = (nfcDevice->nfcidLen > 10) ? 10 : nfcDevice->nfcidLen;
+        memcpy(result->uid, nfcDevice->nfcid, result->uid_len);
+        
+        // Determine tag type
+        if (nfcDevice->type == RFAL_NFC_LISTEN_TYPE_NFCA) {
+            result->tag_type = 1; // NFC-A
+        } else if (nfcDevice->type == RFAL_NFC_LISTEN_TYPE_NFCB) {
+            result->tag_type = 2; // NFC-B
+        } else if (nfcDevice->type == RFAL_NFC_LISTEN_TYPE_NFCF) {
+            result->tag_type = 3; // NFC-F
+        } else {
+            result->tag_type = 0; // Unknown
+        }
+        
+        result->detected = true;
+        result->rssi = nfc_get_rssi();
+        result->estimated_distance_cm = nfc_estimate_distance_from_rssi(result->rssi);
+        
+        platformLog("[NFC] Long-range scan VALID TAG: %lums, RSSI: %d, Dist: %.1fcm, UID: ",
+                   result->read_time_ms, result->rssi, result->estimated_distance_cm);
+        
+        for (uint8_t i = 0; i < result->uid_len; i++) {
+            platformLog("%02X", result->uid[i]);
+        }
+        platformLog("\r\n");
+        
+        // Deactivate the tag
+        rfalNfcDeactivate(RFAL_NFC_DEACTIVATE_IDLE);
+        
+        return true;
+    }
+    
+    platformLog("[NFC] Long-range scan failed: %d\r\n", err);
+    return false;
+}
+
+/*============================================================================*/
+/**
+ * @brief Adaptive NFC scan
+ * 
+ * Automatically tries different scan modes:
+ * 1. Fast scan (no boost, quick)
+ * 2. Medium scan (short boost)
+ * 3. Long-range scan (long boost)
+ * 
+ * @param result Pointer to store scan results
+ * @return true if tag detected
+ */
+/*============================================================================*/
+bool nfc_adaptive_scan(nfc_scan_result_t *result)
+{
+    if (!result) return false;
+    
+    memset(result, 0, sizeof(nfc_scan_result_t));
+    
+    platformLog("[NFC] Starting adaptive scan...\r\n");
+    
+    // Try fast scan first (quickest)
+    result->scan_attempts = 1;
+    if (nfc_fast_scan(result)) {
+        platformLog("[NFC] Adaptive: Fast scan succeeded\r\n");
+        return true;
+    }
+    
+    // Try medium scan with short boost
+    result->scan_attempts = 2;
+    result->boost_duration_ms = 50;
+    if (nfc_long_range_scan(result, 50)) {
+        platformLog("[NFC] Adaptive: Medium scan succeeded\r\n");
+        return true;
+    }
+    
+    // Try long-range scan with longer boost
+    result->scan_attempts = 3;
+    result->boost_duration_ms = 150;
+    if (nfc_long_range_scan(result, 150)) {
+        platformLog("[NFC] Adaptive: Long-range scan succeeded\r\n");
+        return true;
+    }
+    
+    // Try maximum boost
+    result->scan_attempts = 4;
+    result->boost_duration_ms = 300;
+    if (nfc_long_range_scan(result, 300)) {
+        platformLog("[NFC] Adaptive: Maximum boost succeeded\r\n");
+        return true;
+    }
+    
+    platformLog("[NFC] Adaptive scan failed after %d attempts\r\n", result->scan_attempts);
+    return false;
+}
+
+/*============================================================================*/
+/**
+ * @brief Test different boost configurations
+ * 
+ * Tests various carrier boost durations and patterns
+ * to find optimal configuration for your hardware.
+ */
+/*============================================================================*/
+void nfc_test_boost_configurations(void)
+{
+    platformLog("[NFC] Testing boost configurations...\r\n\r\n");
+    
+    uint32_t boost_durations[] = {0, 25, 50, 100, 150, 200, 300, 500};
+    uint8_t num_tests = sizeof(boost_durations) / sizeof(boost_durations[0]);
+    
+    platformLog("Boost | Success | Time(ms) | RSSI | Est.Dist(cm)\r\n");
+    platformLog("------|---------|----------|------|-------------\r\n");
+    
+    for (int i = 0; i < num_tests; i++) {
+        nfc_scan_result_t result;
+        bool success;
+        
+        if (boost_durations[i] == 0) {
+            success = nfc_fast_scan(&result);
+        } else {
+            success = nfc_long_range_scan(&result, boost_durations[i]);
+        }
+        
+        if (success) {
+            platformLog("%5lu |    YES  | %8lu | %4d | %11.1f\r\n",
+                       boost_durations[i], result.read_time_ms,
+                       result.rssi, result.estimated_distance_cm);
+        } else {
+            platformLog("%5lu |     NO  |        - |    - |           -\r\n",
+                       boost_durations[i]);
+        }
+        
+        HAL_Delay(1000); // Wait between tests
+    }
+    
+    platformLog("\r\n[NFC] Boost configuration test complete\r\n");
+}
+
+/*============================================================================*/
+/**
+ * @brief Pulsed carrier test
+ * 
+ * Tests different pulse patterns for carrier boosting.
+ * Pulsed carrier can be more efficient than continuous.
+ */
+/*============================================================================*/
+void nfc_test_pulsed_carrier(void)
+{
+    platformLog("[NFC] Testing pulsed carrier patterns...\r\n\r\n");
+    
+    // Test different pulse patterns
+    struct {
+        uint32_t on_ms;
+        uint32_t off_ms;
+        uint32_t total_ms;
+    } patterns[] = {
+        {100, 0, 100},     // Continuous (baseline)
+        {50, 50, 100},     // 50% duty cycle
+        {20, 80, 100},     // 20% duty cycle
+        {10, 10, 100},     // 50% fast pulses
+        {5, 95, 100},      // 5% duty cycle
+    };
+    
+    uint8_t num_patterns = sizeof(patterns) / sizeof(patterns[0]);
+    
+    for (int i = 0; i < num_patterns; i++) {
+        platformLog("[NFC] Pattern %d: ON=%lums, OFF=%lums, Total=%lums\r\n",
+                   i+1, patterns[i].on_ms, patterns[i].off_ms, patterns[i].total_ms);
+        
+        // Test the pattern
+        if (nfc_pulsed_carrier(patterns[i].total_ms, 
+                              patterns[i].on_ms, 
+                              patterns[i].off_ms)) {
+            platformLog("[NFC]   Pattern executed successfully\r\n");
+            
+            // Test if tag can be read after this pattern
+            HAL_Delay(10);
+            nfc_scan_result_t result;
+            if (nfc_fast_scan(&result)) {
+                platformLog("[NFC]   Tag detected after pattern\r\n");
+            } else {
+                platformLog("[NFC]   No tag detected after pattern\r\n");
+            }
+        } else {
+            platformLog("[NFC]   Pattern failed\r\n");
+        }
+        
+        HAL_Delay(1000);
+    }
+    
+    platformLog("[NFC] Pulsed carrier test complete\r\n");
+}
+
+/*============================================================================*/
+/* Non-blocking Carrier Implementation */
+/*============================================================================*/
+
+#include "FreeRTOS.h"
+#include "task.h"
+
+/* Global state for non-blocking NFC tests */
+typedef struct {
+    bool carrier_active;
+    uint32_t remaining_ms;
+    uint32_t start_time;
+    TaskHandle_t carrier_task;
+    bool pulse_mode;
+    uint32_t pulse_on_ms;
+    uint32_t pulse_off_ms;
+    uint32_t pulse_cycles;
+    uint32_t current_cycle;
+} nfc_test_state_t;
+
+static nfc_test_state_t nfc_state = {0};
+
+/*============================================================================*/
+/**
+ * @brief Non-blocking carrier task
+ * 
+ * Runs carrier transmission in background using FreeRTOS task.
+ * Allows device to remain responsive during long tests.
+ */
+/*============================================================================*/
+static void nfc_carrier_task(void *pvParameters) {
+    (void)pvParameters;
+    
+    platformLog("[NFC] Non-blocking carrier task started\r\n");
+    
+    while (nfc_state.carrier_active) {
+        if (nfc_state.pulse_mode) {
+            // Pulsed mode
+            if (nfc_state.current_cycle < nfc_state.pulse_cycles) {
+                // Turn carrier ON
+                if (test_nfc_continuous_carrier(nfc_state.pulse_on_ms)) {
+                    nfc_state.current_cycle++;
+                    
+                    // If not last cycle, wait OFF period
+                    if (nfc_state.current_cycle < nfc_state.pulse_cycles) {
+                        vTaskDelay(pdMS_TO_TICKS(nfc_state.pulse_off_ms));
+                    }
+                } else {
+                    platformLog("[NFC] ERROR: Failed to start carrier in pulse mode\r\n");
+                    break;
+                }
+            } else {
+                // All cycles complete
+                break;
+            }
+        } else {
+            // Continuous mode
+            uint32_t current_time = HAL_GetTick();
+            uint32_t elapsed = current_time - nfc_state.start_time;
+            
+            if (elapsed < nfc_state.remaining_ms) {
+                // Keep carrier on, check every 100ms
+                vTaskDelay(pdMS_TO_TICKS(100));
+            } else {
+                // Time's up
+                break;
+            }
+        }
+    }
+    
+    // Clean up
+    test_nfc_stop_continuous_carrier();
+    nfc_state.carrier_active = false;
+    
+    platformLog("[NFC] Non-blocking carrier task finished\r\n");
+    vTaskDelete(NULL);
+}
+
+/*============================================================================*/
+/**
+ * @brief Start non-blocking carrier transmission
+ * 
+ * @param duration_ms Duration in milliseconds (1000-120000)
+ * @return true if successful
+ */
+/*============================================================================*/
+bool nfc_start_carrier_nonblocking(uint32_t duration_ms) {
+    if (nfc_state.carrier_active) {
+        platformLog("[NFC] ERROR: Carrier already active\r\n");
+        return false;
+    }
+    
+    // Validate duration
+    if (duration_ms < 1000) {
+        platformLog("[NFC] WARNING: %lu ms too short for non-blocking mode\r\n", duration_ms);
+        platformLog("[NFC] Consider using at least 5000 ms for proper testing\r\n");
+    }
+    
+    if (duration_ms > 120000) {
+        platformLog("[NFC] WARNING: %lu ms (2 minutes) may cause overheating\r\n", duration_ms);
+        platformLog("[NFC] Consider shorter tests or active cooling\r\n");
+    }
+    
+    // Start carrier
+    if (!test_nfc_continuous_carrier(0)) { // Start infinite carrier
+        platformLog("[NFC] ERROR: Failed to start carrier\r\n");
+        return false;
+    }
+    
+    // Initialize state
+    nfc_state.carrier_active = true;
+    nfc_state.remaining_ms = duration_ms;
+    nfc_state.start_time = HAL_GetTick();
+    nfc_state.pulse_mode = false;
+    nfc_state.carrier_task = NULL;
+    
+    // Create task
+    if (xTaskCreate(nfc_carrier_task, "NFC_Carrier", 512, NULL, 
+                    tskIDLE_PRIORITY + 1, &nfc_state.carrier_task) != pdPASS) {
+        platformLog("[NFC] ERROR: Failed to create carrier task\r\n");
+        test_nfc_stop_continuous_carrier();
+        nfc_state.carrier_active = false;
+        return false;
+    }
+    
+    platformLog("[NFC] Started non-blocking carrier for %lu ms\r\n", duration_ms);
+    return true;
+}
+
+/*============================================================================*/
+/**
+ * @brief Start pulsed carrier pattern
+ * 
+ * @param on_ms ON duration per pulse
+ * @param off_ms OFF duration per pulse
+ * @param cycles Number of cycles
+ * @return true if successful
+ */
+/*============================================================================*/
+bool nfc_start_pulsed_carrier(uint32_t on_ms, uint32_t off_ms, uint32_t cycles) {
+    if (nfc_state.carrier_active) {
+        platformLog("[NFC] ERROR: Carrier already active\r\n");
+        return false;
+    }
+    
+    // Validate parameters
+    if (on_ms == 0 || off_ms == 0 || cycles == 0) {
+        platformLog("[NFC] ERROR: Invalid pulse parameters\r\n");
+        platformLog("[NFC] on_ms=%lu, off_ms=%lu, cycles=%lu\r\n", on_ms, off_ms, cycles);
+        return false;
+    }
+    
+    // Initialize state
+    nfc_state.carrier_active = true;
+    nfc_state.pulse_mode = true;
+    nfc_state.pulse_on_ms = on_ms;
+    nfc_state.pulse_off_ms = off_ms;
+    nfc_state.pulse_cycles = cycles;
+    nfc_state.current_cycle = 0;
+    nfc_state.carrier_task = NULL;
+    
+    // Create task
+    if (xTaskCreate(nfc_carrier_task, "NFC_Pulse", 512, NULL, 
+                    tskIDLE_PRIORITY + 1, &nfc_state.carrier_task) != pdPASS) {
+        platformLog("[NFC] ERROR: Failed to create pulse task\r\n");
+        nfc_state.carrier_active = false;
+        return false;
+    }
+    
+    platformLog("[NFC] Started pulsed carrier: %lu ms ON, %lu ms OFF, %lu cycles\r\n", 
+                on_ms, off_ms, cycles);
+    return true;
+}
+
+/*============================================================================*/
+/**
+ * @brief Stop any active carrier transmission
+ */
+/*============================================================================*/
+void nfc_stop_carrier(void) {
+    nfc_state.carrier_active = false;
+    
+    // Give task a moment to clean up
+    vTaskDelay(pdMS_TO_TICKS(50));
+    
+    // Ensure carrier is off
+    test_nfc_stop_continuous_carrier();
+    
+    platformLog("[NFC] Carrier stopped\r\n");
+}
+
+/*============================================================================*/
+/**
+ * @brief Check if carrier is active
+ * @return true if carrier is active
+ */
+/*============================================================================*/
+bool nfc_is_carrier_active(void) {
+    return nfc_state.carrier_active;
+}
+
+/*============================================================================*/
+/**
+ * @brief Get remaining time for current test
+ * @return Remaining time in milliseconds, 0 if not active or pulsed mode
+ */
+/*============================================================================*/
+uint32_t nfc_get_remaining_time(void) {
+    if (!nfc_state.carrier_active || nfc_state.pulse_mode) {
+        return 0;
+    }
+    
+    uint32_t elapsed = HAL_GetTick() - nfc_state.start_time;
+    if (elapsed >= nfc_state.remaining_ms) {
+        return 0;
+    }
+    return nfc_state.remaining_ms - elapsed;
+}
+
+
+

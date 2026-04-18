@@ -42,6 +42,7 @@
 #include "m1_bq27421.h"
 #include "m1_fusb302.h"
 #include "m1_nfc.h"
+#include "nfc_poller.h"
 #include "battery.h"
 
 /*************************** D E F I N E S ************************************/
@@ -1102,6 +1103,8 @@ void cmd_m1_mtest_gpio(char *pconsole, char *input_params[], uint8_t n_params, u
 void cmd_m1_mtest_nfc(char *pconsole, char *input_params[], uint8_t n_params, uint8_t cmd_type)
 {
 	uint32_t input1_val;
+	uint32_t input2_val;
+	uint32_t input3_val;
 	int16_t rssi;
 	uint8_t mode_type;
 
@@ -1111,6 +1114,203 @@ void cmd_m1_mtest_nfc(char *pconsole, char *input_params[], uint8_t n_params, ui
 	{
 		case 90:
     		break;
+		
+		case 91: /* Enhanced NFC carrier test with long durations */
+			if (n_params >= 2) {
+				input1_val = strtoul(input_params[1], NULL, 10);
+				
+				// Validate duration
+				if (input1_val < 1000) {
+					M1_LOG_W("NFC", "%lu ms may not be enough for proper testing", input1_val);
+					sprintf(pconsole, "Warning: %lu ms may not be enough for proper testing\r\n", input1_val);
+					sprintf(pconsole + strlen(pconsole), "Consider using at least 5000 ms (5 seconds)\r\n");
+				}
+				
+				if (input1_val > 120000) {
+					M1_LOG_W("NFC", "%lu ms (2 minutes) may cause overheating", input1_val);
+					sprintf(pconsole, "Warning: %lu ms (2 minutes) may cause overheating\r\n", input1_val);
+					sprintf(pconsole + strlen(pconsole), "Consider shorter tests or active cooling\r\n");
+				}
+				
+				// For long durations, use non-blocking version
+				if (input1_val > 5000) {
+					M1_LOG_I("NFC", "Starting non-blocking carrier for %lu ms", input1_val);
+					if (nfc_start_carrier_nonblocking(input1_val)) {
+						sprintf(pconsole, "✅ Started %lu ms carrier (non-blocking)\r\n", input1_val);
+						sprintf(pconsole + strlen(pconsole), "Device remains responsive during test\r\n");
+						
+						// Show estimated completion
+						uint32_t seconds = input1_val / 1000;
+						uint32_t minutes = seconds / 60;
+						seconds %= 60;
+						
+						if (minutes > 0) {
+							sprintf(pconsole + strlen(pconsole), "Estimated completion: %lu min %lu sec\r\n", 
+								minutes, seconds);
+						} else {
+							sprintf(pconsole + strlen(pconsole), "Estimated completion: %lu seconds\r\n", 
+								seconds);
+						}
+						
+						sprintf(pconsole + strlen(pconsole), "Use 'mtest 92' to stop early\r\n");
+					} else {
+						sprintf(pconsole, "❌ Failed to start non-blocking carrier\r\n");
+						sprintf(pconsole + strlen(pconsole), "Falling back to blocking mode...\r\n");
+						
+						// Fall back to blocking mode
+						if (test_nfc_continuous_carrier(input1_val)) {
+							sprintf(pconsole + strlen(pconsole), "NFC carrier transmitted for %lu ms\r\n", input1_val);
+						} else {
+							sprintf(pconsole + strlen(pconsole), "Failed to transmit NFC carrier\r\n");
+						}
+					}
+				} else {
+					// For short durations, use blocking version
+					M1_LOG_I("NFC", "Testing continuous carrier for %lu ms", input1_val);
+					if (test_nfc_continuous_carrier(input1_val)) {
+						sprintf(pconsole, "NFC carrier transmitted for %lu ms\r\n", input1_val);
+					} else {
+						sprintf(pconsole, "Failed to transmit NFC carrier\r\n");
+					}
+				}
+			} else {
+				sprintf(pconsole, "Enhanced NFC Carrier Test\r\n");
+				sprintf(pconsole + strlen(pconsole), "Usage: mtest 91 <duration_ms>\r\n");
+				sprintf(pconsole + strlen(pconsole), "  duration_ms: 1000-120000 (1-120 seconds)\r\n");
+				sprintf(pconsole + strlen(pconsole), "Examples:\r\n");
+				sprintf(pconsole + strlen(pconsole), "  mtest 91 5000    (5 seconds)\r\n");
+				sprintf(pconsole + strlen(pconsole), "  mtest 91 30000   (30 seconds)\r\n");
+				sprintf(pconsole + strlen(pconsole), "  mtest 91 60000   (60 seconds)\r\n");
+				sprintf(pconsole + strlen(pconsole), "  mtest 91 120000  (120 seconds)\r\n");
+				sprintf(pconsole + strlen(pconsole), "\rNote: >5000ms uses non-blocking mode (device stays responsive)\r\n");
+			}
+			break;
+		
+		case 92: /* Enhanced: Stop carrier (handles both blocking and non-blocking) */
+			M1_LOG_I("NFC", "Stopping NFC carrier");
+			if (nfc_is_carrier_active()) {
+				nfc_stop_carrier();
+				sprintf(pconsole, "NFC carrier stopped (was running in non-blocking mode)\r\n");
+			} else {
+				// Try the old method
+				if (test_nfc_stop_continuous_carrier()) {
+					sprintf(pconsole, "NFC carrier stopped\r\n");
+				} else {
+					sprintf(pconsole, "No active carrier to stop\r\n");
+				}
+			}
+			break;
+		
+		case 93: /* NFC Boost: Test boosted read */
+			if (n_params >= 2) {
+				input1_val = strtoul(input_params[1], NULL, 10);
+				M1_LOG_I("NFC", "Testing boosted read with %lu ms pre-activation\r\n", input1_val);
+				
+				/* Test boosted read */
+				if (test_nfc_boosted_read(input1_val)) {
+					sprintf(pconsole, "Boosted read successful with %lu ms carrier\r\n", input1_val);
+				} else {
+					sprintf(pconsole, "Boosted read test completed (check logs)\r\n");
+				}
+			} else {
+				sprintf(pconsole, "Usage: mtest 93 <boost_duration_ms>\r\n");
+				sprintf(pconsole + strlen(pconsole), "Example: mtest 93 100 (100ms boost)\r\n");
+			}
+			break;
+		
+		case 94: /* Advanced NFC scan with distance */
+			{
+				nfc_scan_result_t result;
+				if (nfc_adaptive_scan(&result)) {
+					sprintf(pconsole, "Tag detected!\r\n");
+					sprintf(pconsole + strlen(pconsole), "Distance: %.1f cm\r\n", 
+							result.estimated_distance_cm);
+					sprintf(pconsole + strlen(pconsole), "RSSI: %d dBm\r\n", result.rssi);
+					sprintf(pconsole + strlen(pconsole), "Read time: %lu ms\r\n", 
+							result.read_time_ms);
+					sprintf(pconsole + strlen(pconsole), "Boost used: %lu ms\r\n", 
+							result.boost_duration_ms);
+					sprintf(pconsole + strlen(pconsole), "Attempts: %d\r\n", 
+							result.scan_attempts);
+				} else {
+					sprintf(pconsole, "No tag detected\r\n");
+				}
+			}
+			break;
+			
+		case 95: /* Test boost configurations */
+			nfc_test_boost_configurations();
+			sprintf(pconsole, "Boost configuration test started (check logs)\r\n");
+			break;
+			
+		case 96: /* Test pulsed carrier */
+			nfc_test_pulsed_carrier();
+			sprintf(pconsole, "Pulsed carrier test started (check logs)\r\n");
+			break;
+			
+		case 97: /* NEW: Pulsed carrier patterns (non-blocking) */
+			if (n_params >= 4) {
+				input1_val = strtoul(input_params[1], NULL, 10); // ON time
+				input2_val = strtoul(input_params[2], NULL, 10); // OFF time
+				input3_val = strtoul(input_params[3], NULL, 10); // Cycles
+				
+				// Validate parameters
+				if (input1_val == 0 || input2_val == 0 || input3_val == 0) {
+					sprintf(pconsole, "Error: Parameters must be > 0\r\n");
+					sprintf(pconsole + strlen(pconsole), "Usage: mtest 97 <on_ms> <off_ms> <cycles>\r\n");
+					break;
+				}
+				
+				uint32_t total_time = (input1_val + input2_val) * input3_val;
+				
+				sprintf(pconsole, "Starting pulsed carrier pattern:\r\n");
+				sprintf(pconsole + strlen(pconsole), "  ON: %lu ms, OFF: %lu ms\r\n", input1_val, input2_val);
+				sprintf(pconsole + strlen(pconsole), "  Cycles: %lu\r\n", input3_val);
+				sprintf(pconsole + strlen(pconsole), "  Total time: %lu ms (~%.1f seconds)\r\n", 
+						total_time, total_time / 1000.0);
+				
+				if (nfc_start_pulsed_carrier(input1_val, input2_val, input3_val)) {
+					sprintf(pconsole + strlen(pconsole), "✅ Pattern started (non-blocking)\r\n");
+					sprintf(pconsole + strlen(pconsole), "Device remains responsive\r\n");
+					sprintf(pconsole + strlen(pconsole), "Use 'mtest 92' to stop early\r\n");
+				} else {
+					sprintf(pconsole + strlen(pconsole), "❌ Failed to start pattern\r\n");
+				}
+			} else {
+				sprintf(pconsole, "NFC Pulsed Carrier Patterns\r\n");
+				sprintf(pconsole + strlen(pconsole), "Usage: mtest 97 <on_ms> <off_ms> <cycles>\r\n");
+				sprintf(pconsole + strlen(pconsole), "Examples:\r\n");
+				sprintf(pconsole + strlen(pconsole), "  mtest 97 500 500 10   (10s total)\r\n");
+				sprintf(pconsole + strlen(pconsole), "  mtest 97 1000 500 20  (30s total)\r\n");
+				sprintf(pconsole + strlen(pconsole), "  mtest 97 2000 1000 5  (15s total)\r\n");
+				sprintf(pconsole + strlen(pconsole), "\rNote: Uses non-blocking implementation\r\n");
+			}
+			break;
+			
+		case 98: /* Get RSSI */
+			{
+				int16_t rssi = nfc_get_rssi();
+				float distance = nfc_estimate_distance_from_rssi(rssi);
+				sprintf(pconsole, "RSSI: %d dBm\r\n", rssi);
+				sprintf(pconsole + strlen(pconsole), "Estimated distance: %.1f cm\r\n", distance);
+			}
+			break;
+			
+		case 99: /* Optimize receiver */
+
+		case 101: /* NEW: Check carrier status */
+			if (nfc_is_carrier_active()) {
+				sprintf(pconsole, "NFC carrier: ACTIVE\r\n");
+				sprintf(pconsole + strlen(pconsole), "Use 'mtest 92' to stop\r\n");
+			} else {
+				sprintf(pconsole, "NFC carrier: INACTIVE\r\n");
+				sprintf(pconsole + strlen(pconsole), "No carrier transmission in progress\r\n");
+			}
+			break;
+
+			nfc_optimize_receiver();
+			sprintf(pconsole, "Receiver optimized for weak signals\r\n");
+			break;
 
     	default:
     		M1_LOG_N(M1_LOGDB_TAG, "CLI mtest: command not defined yet!\r\n");

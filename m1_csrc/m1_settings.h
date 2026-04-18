@@ -14,6 +14,7 @@
 #define M1_SETTINGS_H_
 
 void settings_lcd_and_notifications(void);
+void settings_backlight(void);
 void settings_buzzer(void);
 void settings_power(void);
 void settings_system(void);

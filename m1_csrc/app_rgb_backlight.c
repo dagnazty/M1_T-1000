@@ -120,7 +120,7 @@ static void rgb_menu_draw(uint8_t sel)
 
     m1_u8g2_firstpage();
     u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
-    m1_draw_header_bar(&m1_u8g2, "RGB Backlight", badge);
+    m1_draw_header_bar(&m1_u8g2, "Backlight", badge);
     m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
     u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
 
@@ -161,9 +161,8 @@ void app_rgb_backlight_run(void)
     uint8_t needs_redraw = 1U;
     uint8_t bright_idx;
 
-    /* Initialize RGB backlight on entry */
+    /* Init RGB hardware on entry (safe to call again, sets up PD3) */
     rgb_bl_init();
-    rgb_bl_on();
     bright_idx = rgb_brightness_index(rgb_bl_get_brightness());
 
     for (;;)
@@ -180,8 +179,7 @@ void app_rgb_backlight_run(void)
 
         if (btn == GAME_BTN_BACK)
         {
-            rgb_bl_off();
-            rgb_bl_deinit();
+            /* Keep backlight on — this is the system backlight now */
             return;
         }
 

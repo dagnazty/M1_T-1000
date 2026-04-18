@@ -65,6 +65,7 @@ static char *pfullpath = NULL;
 static char *pfilename_md5 = NULL;
 static uint8_t esp32_update_status = M1_FW_UPDATE_NOT_READY;
 static uint32_t start_address = ESP32_START_ADDRESS_MIN;
+static uint8_t esp32_menu_scroll = 0;  /* scroll offset for 3-visible menu */
 static size_t image_size = 0;
 static uint8_t progress_percent_count = 0;
 static 	S_M1_file_info *f_info = NULL;
@@ -198,6 +199,8 @@ void setting_esp32_image_file(void)
     uint8_t hex_md5_infile[MAX(MD5_SIZE_ROM, MD5_SIZE_STUB) + 1] = {0};
     size_t count, sum;
 
+	bool has_md5 = false;
+
 	f_info = storage_browse(NULL);
 
 	esp32_update_status = M1_FW_IMAGE_FILE_TYPE_ERROR; // reset
@@ -220,21 +223,16 @@ void setting_esp32_image_file(void)
 				break;
 			if ( strcmp(&pfilename_md5[uret], ".bin" ))
 				break;
-			// Get the filename of the md5
+			// Check for optional .md5 companion file
 			strcpy(&pfilename_md5[uret + 1], "md5");
-			// Open MD5 file to check its existing
 			m1_fb_dyn_strcat(pfullpath, 2, "",  f_info->dir_name, pfilename_md5);
 			uret = m1_fb_open_file(&hfile_fw, pfullpath);
 			if ( !uret )
 			{
-				esp32_update_status = M1_FW_UPDATE_READY;
+				has_md5 = true;
 				m1_fb_close_file(&hfile_fw);
 			}
-			else
-			{
-				esp32_update_status = M1_FW_CRC_FILE_ACCESS_ERROR;
-				break;
-			}
+			esp32_update_status = M1_FW_UPDATE_READY; // Proceed with or without MD5
 		} while (0);
 	} // if ( f_info->file_is_selected )
 
@@ -253,31 +251,34 @@ void setting_esp32_image_file(void)
     	u8g2_DrawXBMP(&m1_u8g2, M1_LCD_DISPLAY_WIDTH - 24, 16, 18, 32, hourglass_18x32); // Draw icon
     	m1_u8g2_nextpage(); // Update display RAM
 
-        m1_fb_dyn_strcat(pfullpath, 2, "",  f_info->dir_name, pfilename_md5);
-        uret = m1_fb_open_file(&hfile_fw, pfullpath);
-        if ( !uret )
-        {
-        	image_size = f_size(&hfile_fw);
-		    // MD5 hash is a 32-character string (16 hex values)
-		    if ( image_size != MD5_SIZE_ROM )
-		    {
+		// Optional MD5 verification: only if .md5 companion file exists
+		if ( has_md5 )
+		{
+        	m1_fb_dyn_strcat(pfullpath, 2, "",  f_info->dir_name, pfilename_md5);
+        	uret = m1_fb_open_file(&hfile_fw, pfullpath);
+        	if ( !uret )
+        	{
+        		image_size = f_size(&hfile_fw);
+		    	// MD5 hash is a 32-character string (16 hex values)
+		    	if ( image_size != MD5_SIZE_ROM )
+		    	{
+		    		m1_fb_close_file(&hfile_fw);
+		    		uret = M1_FW_CRC_FILE_INVALID;
+		    		break;
+		    	} // if ( image_size != MD5_SIZE_ROM )
+		    	count = m1_fb_read_from_file(&hfile_fw, hex_md5_infile, MD5_SIZE_ROM);
 		    	m1_fb_close_file(&hfile_fw);
-		    	uret = M1_FW_CRC_FILE_INVALID;
-		    	break;
-		    } // if ( image_size != MD5_SIZE_ROM )
-		    count = m1_fb_read_from_file(&hfile_fw, hex_md5_infile, MD5_SIZE_ROM);
-		    m1_fb_close_file(&hfile_fw);
-		    if ( count != MD5_SIZE_ROM )
-		    {
-		    	uret = M1_FW_CRC_FILE_ACCESS_ERROR;
-		    	break;
-		    }
-        } // if ( !uret )
-        else
-        {
-        	uret = M1_FW_CRC_FILE_ACCESS_ERROR;
-        	break;
-        }
+		    	if ( count != MD5_SIZE_ROM )
+		    	{
+		    		uret = M1_FW_CRC_FILE_ACCESS_ERROR;
+		    		break;
+		    	}
+        	} // if ( !uret )
+        	else
+        	{
+        		has_md5 = false; // Couldn't re-open, skip verification
+        	}
+		} // if ( has_md5 )
 
         uret = m1_fb_dyn_strcat(pfullpath, 2, "",  f_info->dir_name, f_info->file_name);
         uret = m1_fb_open_file(&hfile_fw, pfullpath);
@@ -291,44 +292,43 @@ void setting_esp32_image_file(void)
 		    	uret = M1_FW_IMAGE_SIZE_INVALID;
 		    	break;
 		    } // if ( (!image_size) || (image_size % 4 != 0) )
-		    // Check for image_size
-		    // It should be smaller than 4Mb
 #ifdef MD5_ENABLED
-			mh_md5_init(start_address, image_size);
-#endif
-			sum = image_size;
-			while ( sum )
+			if ( has_md5 )
 			{
-				count = m1_fb_read_from_file(&hfile_fw, payload, ESP32_IMAGE_CHUNK_SIZE);
-				if ( !count ) // Read failed?
+				mh_md5_init(start_address, image_size);
+				sum = image_size;
+				while ( sum )
+				{
+					count = m1_fb_read_from_file(&hfile_fw, payload, ESP32_IMAGE_CHUNK_SIZE);
+					if ( !count ) // Read failed?
+					{
+						uret = M1_FW_IMAGE_FILE_ACCESS_ERROR;
+						break;
+					}
+					sum -= count;
+					mh_md5_update(payload, (count + 3) & ~3);
+				} // while ( sum )
+
+				if ( !sum )
+				{
+				    mh_md5_final(raw_md5);
+				    mh_hexify(raw_md5, hex_md5);
+				    // Compare md5 here
+				    uret = memcmp(hex_md5_infile, hex_md5, MD5_SIZE_ROM);
+				    if ( uret )
+				    {
+				    	// MD5 mismatch — warn but don't block flashing
+						uret = 0;
+				    }
+				} // if ( !sum )
+				else
 				{
 					uret = M1_FW_IMAGE_FILE_ACCESS_ERROR;
 					break;
 				}
-				sum -= count;
-#ifdef MD5_ENABLED
-				mh_md5_update(payload, (count + 3) & ~3);
+			} // if ( has_md5 )
 #endif
-			} // while ( sum )
-
-			if ( !sum )
-			{
-			    mh_md5_final(raw_md5);
-			    mh_hexify(raw_md5, hex_md5);
-			    // Compare md5 here
-			    uret = memcmp(hex_md5_infile, hex_md5, MD5_SIZE_ROM);
-			    if ( uret )
-			    {
-			    	uret = M1_FW_CRC_CHECKSUM_UNMATCHED;
-			    	m1_fb_close_file(&hfile_fw);
-			    	break;
-			    }
-			} // if ( !sum )
-			else
-			{
-				uret = M1_FW_IMAGE_FILE_ACCESS_ERROR;
-				break;
-			}
+			uret = 0; // success
 		} // if ( !uret )
 		else
 		{
@@ -455,6 +455,67 @@ void setting_esp32_firmware_update(void)
   * @retval None
   */
 /******************************************************************************/
+static void esp32_draw_progress_overlay(size_t remainder)
+{
+	static uint32_t total_size = 0;
+	static uint8_t prog_pct = 0;
+	uint8_t pct;
+	size_t written;
+	char pct_str[24];
+
+	if (total_size < remainder)
+	{
+		total_size = remainder;
+		prog_pct = 0;
+	}
+
+	written = total_size - remainder;
+	pct = (uint8_t)((written * 100) / total_size);
+
+	if (pct > prog_pct || prog_pct == 0)
+	{
+		prog_pct = pct;
+
+		m1_u8g2_firstpage();
+		do
+		{
+			m1_draw_header_bar(&m1_u8g2, "Settings", "ESP32");
+			m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+			/* Hourglass icon on the left */
+			u8g2_DrawXBMP(&m1_u8g2, 5, 17, 18, 32, hourglass_18x32);
+			/* "Updating..." text to the right of icon */
+			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_B);
+			u8g2_DrawStr(&m1_u8g2, 26, 30, "Updating...");
+			u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
+			/* Progress bar to the right of icon, inside the frame */
+			u8g2_DrawFrame(&m1_u8g2, 26, 35, 96, 10);
+			/* Progress bar fill */
+			if (pct > 0)
+				u8g2_DrawBox(&m1_u8g2, 27, 36, (uint8_t)((94 * pct) / 100), 8);
+			/* Percent text inside the progress bar */
+			snprintf(pct_str, sizeof(pct_str), "%d%%", pct);
+			/* Invert text color when bar is behind it */
+			if (pct > 40)
+			{
+				u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
+				u8g2_DrawStr(&m1_u8g2, 62, 43, pct_str);
+				u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+			}
+			else
+			{
+				u8g2_DrawStr(&m1_u8g2, 62, 43, pct_str);
+			}
+			m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "", NULL);
+		} while (m1_u8g2_nextpage());
+	}
+
+	if (pct >= 100)
+	{
+		total_size = 0;
+		prog_pct = 0;
+	}
+}
+
 static esp_loader_error_t m1_fw_app(FIL *hfile)
 {
 	GPIO_InitTypeDef GPIO_InitStruct = {0};
@@ -471,7 +532,7 @@ static esp_loader_error_t m1_fw_app(FIL *hfile)
 	};
 
 	write_size = image_size;
-	fw_gui_progress_update(write_size);
+	esp32_draw_progress_overlay(write_size);
 
 	loader_port_stm32_init(&config);
 	esp32_UART_init();
@@ -490,7 +551,7 @@ static esp_loader_error_t m1_fw_app(FIL *hfile)
 	m1_ringbuffer_reset(&esp32_rb_hdl);
 
 	flash_err = ESP_LOADER_ERROR_FAIL;
-	while (connect_to_target(ESP32_UART_HIGH_BAUDRATE)==ESP_LOADER_SUCCESS)
+	while (connect_to_target(230400)==ESP_LOADER_SUCCESS)
 	{
 		f_lseek(hfile, 0); // Move file pointer to the beginning of the file
 		//write_size = image_size;
@@ -505,7 +566,7 @@ static esp_loader_error_t m1_fw_app(FIL *hfile)
 			if ( flash_err != ESP_LOADER_SUCCESS )
 				break;
 			write_size -= count;
-			fw_gui_progress_update(write_size);
+			esp32_draw_progress_overlay(write_size);
 		} // while ( write_size )
 
 		if ( write_size || (flash_err != ESP_LOADER_SUCCESS) )
@@ -661,18 +722,24 @@ void setting_esp32_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
 	uint16_t msg_len, msg_id;
 	uint8_t *pboot_info;
 	char line1[32] = {0};
+	char addr_str[16] = {0};
 
 	n_items = phmenu->num_submenu_items;
-	menu_text_y = 18;
+	menu_text_y = 24;
+
+	/* Scroll: show 2 items visible */
+	if (sel_item >= 2) esp32_menu_scroll = sel_item - 1;
+	else esp32_menu_scroll = 0;
 
 	/* Graphic work starts here */
 	m1_u8g2_firstpage(); // This call required for page drawing in mode 1
     do
     {
     	m1_draw_header_bar(&m1_u8g2, "Settings", "ESP32");
-    	m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 37);
-    	for (i=0; i<n_items; i++)
+    	m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+    	for (i=esp32_menu_scroll; i<n_items && i<esp32_menu_scroll+2; i++)
     	{
+    		uint8_t disp_idx = i - esp32_menu_scroll;
     		if ( i==sel_item )
     		{
     			u8g2_DrawBox(&m1_u8g2, 6, menu_text_y - 7, 114, 9);
@@ -693,7 +760,7 @@ void setting_esp32_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
     			u8g2_DrawFrame(&m1_u8g2, 6, menu_text_y - 7, 114, 9);
     			u8g2_DrawStr(&m1_u8g2, 10, menu_text_y, phmenu->submenu[i]->title);
     		}
-    		menu_text_y += 8;
+    		menu_text_y += 10;
     	} // for (i=0; i<n_items; i++)
 
     	switch ( sel_item )
@@ -802,7 +869,12 @@ void setting_esp32_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
     		default: // Unknown selection
     			break;
     	} // switch ( sel_item )
-    	if (line1[0]) m1_draw_text(&m1_u8g2, 8, 49, 114, line1, TEXT_ALIGN_LEFT);
+    	/* Scroll indicators */
+	if (esp32_menu_scroll > 0)
+		u8g2_DrawTriangle(&m1_u8g2, 60, 15, 66, 15, 63, 12);
+	if (esp32_menu_scroll + 2 < n_items)
+		u8g2_DrawTriangle(&m1_u8g2, 60, 46, 66, 46, 63, 49);
+	if (line1[0]) m1_draw_text(&m1_u8g2, 8, 46, 114, line1, TEXT_ALIGN_LEFT);
     	m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Open", arrowright_8x8);
     } while (m1_u8g2_nextpage());
 

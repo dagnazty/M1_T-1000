@@ -90,6 +90,11 @@ static bool wifi_scan_ap_connect_selected(const wifi_scanlist_t *ap);
 static void wifi_scan_ap_save_selected(const wifi_scanlist_t *ap);
 static void wifi_scan_ap_show_details(const wifi_scanlist_t *ap);
 static uint8_t wifi_scan_ap_options(const wifi_scanlist_t *ap);
+
+#ifdef M1_APP_WIFI_OFFENSIVE_ENABLE
+static void wifi_attack_add_target(const wifi_scanlist_t *ap);
+static bool wifi_attack_target_actions(uint8_t idx);
+#endif
 static void wifi_draw_stats_page(char body_lines[][24], uint8_t scroll);
 #endif
 
@@ -460,6 +465,18 @@ void menu_wifi_init(void)
 	;
 } // void menu_wifi_init(void)
 
+#ifdef M1_APP_WIFI_OFFENSIVE_ENABLE
+/*============================================================================*/
+/**
+  * @brief No-op init for the "Offensive Tools" submenu container
+  */
+/*============================================================================*/
+void menu_wifi_offensive_init(void)
+{
+	;
+}
+#endif
+
 
 /*============================================================================*/
 void  menu_wifi_exit(void)
@@ -526,6 +543,7 @@ void wifi_scan_ap(void)
 
 					xQueueReset(main_q_hdl); // Reset main q before return
 					m1_esp32_deinit();
+					esp32_main_force_reinit();
 					break; // Exit
 				}
 				else if ( this_button_status.event[BUTTON_UP_KP_ID]==BUTTON_EVENT_CLICK )
@@ -1171,6 +1189,10 @@ static uint8_t wifi_scan_ap_options(const wifi_scanlist_t *ap)
 		WIFI_SCAN_ACT_CONNECT = 0,
 		WIFI_SCAN_ACT_SAVE,
 		WIFI_SCAN_ACT_DETAILS,
+#ifdef M1_APP_WIFI_OFFENSIVE_ENABLE
+		WIFI_SCAN_ACT_DEAUTH,
+		WIFI_SCAN_ACT_ADD_TARGET,
+#endif
 		WIFI_SCAN_ACT_COUNT
 	};
 
@@ -1203,8 +1225,16 @@ static uint8_t wifi_scan_ap_options(const wifi_scanlist_t *ap)
 				option_label = "Connect";
 			else if (row == WIFI_SCAN_ACT_SAVE)
 				option_label = save_label;
-			else
+			else if (row == WIFI_SCAN_ACT_DETAILS)
 				option_label = "Details";
+#ifdef M1_APP_WIFI_OFFENSIVE_ENABLE
+			else if (row == WIFI_SCAN_ACT_DEAUTH)
+				option_label = "Deauth";
+			else if (row == WIFI_SCAN_ACT_ADD_TARGET)
+				option_label = "Add Target";
+#endif
+			else
+				option_label = "???";
 
 			row_y = (uint8_t)(30 + ((row - visible_start) * 12U));
 			if (row == selected)
@@ -1259,11 +1289,44 @@ static uint8_t wifi_scan_ap_options(const wifi_scanlist_t *ap)
 				wifi_scan_ap_save_selected(ap);
 				return 1;
 			}
-			else
+			else if (selected == WIFI_SCAN_ACT_DETAILS)
 			{
 				wifi_scan_ap_show_details(ap);
 				return 1;
 			}
+#ifdef M1_APP_WIFI_OFFENSIVE_ENABLE
+			else if (selected == WIFI_SCAN_ACT_DEAUTH)
+			{
+				/* Deauth this AP immediately */
+				char bssid_str[18];
+				strncpy(bssid_str, (const char *)ap->bssid, sizeof(bssid_str) - 1);
+				bssid_str[sizeof(bssid_str) - 1] = '\0';
+				wifi_display_panel("Deauth", bssid_str, "Sending deauths", "BACK to stop");
+				wifi_esp_deauth_start(bssid_str, ap->channel, NULL, 0);
+				/* Wait for BACK to stop */
+				while (1)
+				{
+					ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+					if (ret == pdTRUE && q_item.q_evt_type == Q_EVENT_KEYPAD)
+					{
+						xQueueReceive(button_events_q_hdl, &this_button_status, 0);
+						if (this_button_status.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK)
+						{
+							wifi_esp_deauth_stop();
+							return 1;
+						}
+					}
+				}
+			}
+			else if (selected == WIFI_SCAN_ACT_ADD_TARGET)
+			{
+				/* Add this AP to the attack target list */
+				wifi_attack_add_target(ap);
+				wifi_display_msg("Target", "added");
+				vTaskDelay(pdMS_TO_TICKS(1000));
+				return 1;
+			}
+#endif
 		}
 	}
 }
@@ -1923,37 +1986,977 @@ void wifi_sync_rtc_tool(void)
 } // void wifi_sync_rtc_tool(void)
 
 
-#else /* M1_APP_WIFI_CONNECT_ENABLE not defined */
+/*============================================================================*/
+/*  Offensive WiFi — Attack Target List                              */
+/*============================================================================*/
+
+#ifdef M1_APP_WIFI_OFFENSIVE_ENABLE
+
+#define WIFI_ATTACK_MAX_TARGETS 16
+
+typedef struct {
+	char bssid[18];		/* "xx:xx:xx:xx:xx:xx" */
+	char ssid[33];		/* SSID or "*hidden*" */
+	uint8_t channel;
+} wifi_attack_target_t;
+
+static wifi_attack_target_t s_attack_targets[WIFI_ATTACK_MAX_TARGETS];
+static uint8_t s_attack_target_count = 0;
 
 /*============================================================================*/
 /**
-  * @brief WiFi config - stub when connect feature not enabled
+  * @brief Add a scanned AP to the attack target list
   */
 /*============================================================================*/
-void wifi_config(void)
+static void wifi_attack_add_target(const wifi_scanlist_t *ap)
+{
+	if (ap == NULL || s_attack_target_count >= WIFI_ATTACK_MAX_TARGETS)
+		return;
+
+	/* Check for duplicates */
+	char bssid_str[18];
+	strncpy(bssid_str, (const char *)ap->bssid, sizeof(bssid_str) - 1);
+	bssid_str[sizeof(bssid_str) - 1] = '\0';
+
+	for (uint8_t i = 0; i < s_attack_target_count; i++) {
+		if (strcmp(s_attack_targets[i].bssid, bssid_str) == 0)
+			return;  /* already in list */
+	}
+
+	strncpy(s_attack_targets[s_attack_target_count].bssid, bssid_str, 17);
+	s_attack_targets[s_attack_target_count].bssid[17] = '\0';
+
+	if (ap->ssid[0] == 0x00)
+		strncpy(s_attack_targets[s_attack_target_count].ssid, "*hidden*", 32);
+	else {
+		strncpy(s_attack_targets[s_attack_target_count].ssid, (const char *)ap->ssid, 32);
+		s_attack_targets[s_attack_target_count].ssid[32] = '\0';
+	}
+
+	s_attack_targets[s_attack_target_count].channel = ap->channel;
+	s_attack_target_count++;
+}
+
+/*============================================================================*/
+/**
+  * @brief Per-target offensive actions menu (opened from Attack List on OK)
+  * @retval true if the target was removed from the list
+  */
+/*============================================================================*/
+static bool wifi_attack_target_actions(uint8_t idx)
+{
+	enum
+	{
+		WIFI_ATK_ACT_DEAUTH = 0,
+		WIFI_ATK_ACT_HS_CAPTURE,
+		WIFI_ATK_ACT_PMKID,
+		WIFI_ATK_ACT_BEACON_CLONE,
+		WIFI_ATK_ACT_PROBE_SNIFF,
+		WIFI_ATK_ACT_KARMA,
+		WIFI_ATK_ACT_REMOVE,
+		WIFI_ATK_ACT_COUNT
+	};
+
+	S_M1_Buttons_Status this_button_status;
+	S_M1_Main_Q_t q_item;
+	BaseType_t ret;
+	uint8_t selected = 0;
+	uint8_t visible_start;
+	uint8_t row_y;
+	const char *option_label;
+	bool removed = false;
+
+	if (idx >= s_attack_target_count)
+		return false;
+
+	while (1)
+	{
+		m1_u8g2_firstpage();
+		m1_draw_header_bar(&m1_u8g2, "Target Actions", s_attack_targets[idx].ssid);
+		m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+		u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+
+		visible_start = (selected >= 2U) ? (uint8_t)(selected - 1U) : 0U;
+		for (uint8_t row = visible_start; row < WIFI_ATK_ACT_COUNT && row < (visible_start + 2U); row++)
+		{
+			if (row == WIFI_ATK_ACT_DEAUTH)
+				option_label = "Deauth";
+			else if (row == WIFI_ATK_ACT_HS_CAPTURE)
+				option_label = "HS Capture";
+			else if (row == WIFI_ATK_ACT_PMKID)
+				option_label = "PMKID Capture";
+			else if (row == WIFI_ATK_ACT_BEACON_CLONE)
+				option_label = "Clone Beacon";
+			else if (row == WIFI_ATK_ACT_PROBE_SNIFF)
+				option_label = "Probe Sniff";
+			else if (row == WIFI_ATK_ACT_KARMA)
+				option_label = "Karma";
+			else if (row == WIFI_ATK_ACT_REMOVE)
+				option_label = "Remove Target";
+			else
+				option_label = "???";
+
+			row_y = (uint8_t)(30 + ((row - visible_start) * 12U));
+			if (row == selected)
+			{
+				u8g2_DrawBox(&m1_u8g2, 6, row_y - 7, 116, 11);
+				u8g2_SetDrawColor(&m1_u8g2, 0);
+				m1_draw_text(&m1_u8g2, 10, row_y, 108, option_label, TEXT_ALIGN_LEFT);
+				u8g2_SetDrawColor(&m1_u8g2, 1);
+			}
+			else
+			{
+				u8g2_DrawFrame(&m1_u8g2, 6, row_y - 7, 116, 11);
+				m1_draw_text(&m1_u8g2, 10, row_y, 108, option_label, TEXT_ALIGN_LEFT);
+			}
+		}
+
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Select", NULL);
+		m1_u8g2_nextpage();
+
+		ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+		if (ret != pdTRUE || q_item.q_evt_type != Q_EVENT_KEYPAD)
+			continue;
+
+		xQueueReceive(button_events_q_hdl, &this_button_status, 0);
+
+		if (this_button_status.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK)
+			return removed;
+
+		if (this_button_status.event[BUTTON_UP_KP_ID] == BUTTON_EVENT_CLICK)
+		{
+			if (selected > 0) selected--;
+			else selected = WIFI_ATK_ACT_COUNT - 1;
+		}
+		else if (this_button_status.event[BUTTON_DOWN_KP_ID] == BUTTON_EVENT_CLICK)
+		{
+			selected++;
+			if (selected >= WIFI_ATK_ACT_COUNT) selected = 0;
+		}
+		else if (this_button_status.event[BUTTON_OK_KP_ID] == BUTTON_EVENT_CLICK ||
+				 this_button_status.event[BUTTON_RIGHT_KP_ID] == BUTTON_EVENT_CLICK)
+		{
+			if (selected == WIFI_ATK_ACT_DEAUTH)
+			{
+				wifi_display_panel("Deauth",
+					s_attack_targets[idx].bssid,
+					"Sending deauths",
+					"BACK to stop");
+				wifi_esp_deauth_start(s_attack_targets[idx].bssid,
+									  s_attack_targets[idx].channel, NULL, 0);
+				while (1)
+				{
+					ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+					if (ret == pdTRUE && q_item.q_evt_type == Q_EVENT_KEYPAD)
+					{
+						xQueueReceive(button_events_q_hdl, &this_button_status, 0);
+						if (this_button_status.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK)
+						{
+							wifi_esp_deauth_stop();
+							break;
+						}
+					}
+				}
+			}
+			else if (selected == WIFI_ATK_ACT_HS_CAPTURE)
+			{
+				wifi_display_panel("HS Capture",
+					s_attack_targets[idx].bssid,
+					"Deauthing &",
+					"grabbing EAPOL...");
+				if (wifi_esp_hscap_start(s_attack_targets[idx].bssid,
+										 s_attack_targets[idx].channel, 5) == SUCCESS)
+					wifi_display_msg("HS Capture", "Got frames!");
+				else
+					wifi_display_msg("HS Capture", "Timeout");
+				vTaskDelay(pdMS_TO_TICKS(1500));
+			}
+			else if (selected == WIFI_ATK_ACT_BEACON_CLONE)
+			{
+				const char *ssids[1];
+				ssids[0] = s_attack_targets[idx].ssid;
+				wifi_display_panel("Clone Beacon",
+					s_attack_targets[idx].ssid,
+					"Broadcasting",
+					"BACK to stop");
+				if (wifi_esp_beacon_start(ssids, 1, s_attack_targets[idx].channel) == SUCCESS)
+				{
+					while (1)
+					{
+						ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+						if (ret == pdTRUE && q_item.q_evt_type == Q_EVENT_KEYPAD)
+						{
+							xQueueReceive(button_events_q_hdl, &this_button_status, 0);
+							if (this_button_status.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK)
+							{
+								wifi_esp_beacon_stop();
+								break;
+							}
+						}
+					}
+				}
+				else
+				{
+					wifi_display_msg("Clone Beacon", "Start failed");
+					vTaskDelay(pdMS_TO_TICKS(1500));
+				}
+			}
+			else if (selected == WIFI_ATK_ACT_PMKID)
+			{
+				wifi_display_panel("PMKID Capture",
+					s_attack_targets[idx].bssid,
+					"Requesting PMKID",
+					"Please wait...");
+				if (wifi_esp_pmkid_capture(s_attack_targets[idx].bssid,
+										   s_attack_targets[idx].channel) == SUCCESS)
+					wifi_display_msg("PMKID", "Captured!");
+				else
+					wifi_display_msg("PMKID", "Failed");
+				vTaskDelay(pdMS_TO_TICKS(1500));
+			}
+			else if (selected == WIFI_ATK_ACT_PROBE_SNIFF)
+			{
+				wifi_display_panel("Probe Sniff",
+					s_attack_targets[idx].ssid,
+					"Sniffing probes",
+					"BACK to stop");
+				if (wifi_esp_probe_start(s_attack_targets[idx].channel, 300) == SUCCESS)
+				{
+					while (1)
+					{
+						ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+						if (ret == pdTRUE && q_item.q_evt_type == Q_EVENT_KEYPAD)
+						{
+							xQueueReceive(button_events_q_hdl, &this_button_status, 0);
+							if (this_button_status.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK)
+							{
+								wifi_esp_probe_stop();
+								break;
+							}
+						}
+					}
+				}
+				else
+				{
+					wifi_display_msg("Probe Sniff", "Start failed");
+					vTaskDelay(pdMS_TO_TICKS(1500));
+				}
+			}
+			else if (selected == WIFI_ATK_ACT_KARMA)
+			{
+				wifi_display_panel("Karma",
+					s_attack_targets[idx].ssid,
+					"Responding to probes",
+					"BACK to stop");
+				if (wifi_esp_karma_start(s_attack_targets[idx].channel) == SUCCESS)
+				{
+					while (1)
+					{
+						ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+						if (ret == pdTRUE && q_item.q_evt_type == Q_EVENT_KEYPAD)
+						{
+							xQueueReceive(button_events_q_hdl, &this_button_status, 0);
+							if (this_button_status.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK)
+							{
+								wifi_esp_karma_stop();
+								break;
+							}
+						}
+					}
+				}
+				else
+				{
+					wifi_display_msg("Karma", "Start failed");
+					vTaskDelay(pdMS_TO_TICKS(1500));
+				}
+			}
+			else if (selected == WIFI_ATK_ACT_REMOVE)
+			{
+				for (uint8_t i = idx; i + 1 < s_attack_target_count; i++)
+					s_attack_targets[i] = s_attack_targets[i + 1];
+				s_attack_target_count--;
+				removed = true;
+				return removed;
+			}
+		}
+	}
+}
+
+
+/*============================================================================*/
+/**
+  * @brief Attack List — manage deauth targets, start/stop attacks
+  */
+/*============================================================================*/
+void wifi_attack_list(void)
 {
 	S_M1_Buttons_Status this_button_status;
 	S_M1_Main_Q_t q_item;
 	BaseType_t ret;
+	uint8_t sel_idx = 0;
+	bool attacking = false;
+	char line1[24];
+	char line2[24];
 
-	m1_gui_let_update_fw();
+	/* Ensure ESP32 is ready */
+	if (!wifi_ensure_esp32_ready()) {
+		wifi_display_msg("ESP32", "not ready!");
+		vTaskDelay(pdMS_TO_TICKS(2000));
+		return;
+	}
 
-	while (1 )
+	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
+
+	while (1)
 	{
-		ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
-		if (ret==pdTRUE)
+		m1_u8g2_firstpage();
+
+		if (s_attack_target_count == 0)
 		{
-			if ( q_item.q_evt_type==Q_EVENT_KEYPAD )
-			{
-				ret = xQueueReceive(button_events_q_hdl, &this_button_status, 0);
-				if ( this_button_status.event[BUTTON_BACK_KP_ID]==BUTTON_EVENT_CLICK )
-				{
-					xQueueReset(main_q_hdl);
-					break;
+			m1_draw_header_bar(&m1_u8g2, "Attack List", "Empty");
+			m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+			u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+			m1_draw_text(&m1_u8g2, 8, 30, 114, "Scan & Add targets", TEXT_ALIGN_LEFT);
+			m1_draw_text(&m1_u8g2, 8, 40, 114, "from scan menu", TEXT_ALIGN_LEFT);
+		}
+		else
+		{
+			snprintf(line1, sizeof(line1), "%u/%u %s",
+					sel_idx + 1, s_attack_target_count,
+					attacking ? "ATTACK" : "");
+			m1_draw_header_bar(&m1_u8g2, "Attack List", line1);
+			m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+			u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+
+			/* Show selected target */
+			strncpy(line1, s_attack_targets[sel_idx].ssid, 20);
+			line1[20] = '\0';
+			m1_draw_text(&m1_u8g2, 8, 24, 114, line1, TEXT_ALIGN_LEFT);
+
+			m1_draw_text(&m1_u8g2, 8, 34, 114,
+				s_attack_targets[sel_idx].bssid, TEXT_ALIGN_LEFT);
+
+			snprintf(line2, sizeof(line2), "Ch:%u",
+				s_attack_targets[sel_idx].channel);
+			m1_draw_text(&m1_u8g2, 8, 44, 114, line2, TEXT_ALIGN_LEFT);
+		}
+
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back",
+							attacking ? "Stop" : "Actions", arrowright_8x8);
+		m1_u8g2_nextpage();
+
+		ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+		if (ret != pdTRUE || q_item.q_evt_type != Q_EVENT_KEYPAD)
+			continue;
+
+		xQueueReceive(button_events_q_hdl, &this_button_status, 0);
+
+		if (this_button_status.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK)
+		{
+			if (attacking) {
+				wifi_esp_deauth_stop();
+				attacking = false;
+			}
+			xQueueReset(main_q_hdl);
+			return;
+		}
+		else if (this_button_status.event[BUTTON_UP_KP_ID] == BUTTON_EVENT_CLICK)
+		{
+			if (s_attack_target_count > 0) {
+				if (sel_idx > 0) sel_idx--;
+				else sel_idx = s_attack_target_count - 1;
+			}
+		}
+		else if (this_button_status.event[BUTTON_DOWN_KP_ID] == BUTTON_EVENT_CLICK)
+		{
+			if (s_attack_target_count > 0) {
+				sel_idx++;
+				if (sel_idx >= s_attack_target_count) sel_idx = 0;
+			}
+		}
+		else if (this_button_status.event[BUTTON_OK_KP_ID] == BUTTON_EVENT_CLICK)
+		{
+			if (s_attack_target_count == 0) continue;
+
+			if (attacking) {
+				/* Stop any in-progress attack before opening actions menu */
+				wifi_esp_deauth_stop();
+				attacking = false;
+			}
+			/* Open per-target offensive actions menu */
+			if (wifi_attack_target_actions(sel_idx)) {
+				/* Target was removed — clamp index */
+				if (s_attack_target_count == 0) sel_idx = 0;
+				else if (sel_idx >= s_attack_target_count)
+					sel_idx = s_attack_target_count - 1;
+			}
+		}
+		else if (this_button_status.event[BUTTON_RIGHT_KP_ID] == BUTTON_EVENT_CLICK)
+		{
+			if (s_attack_target_count == 0) continue;
+
+			if (!attacking) {
+				/* Deauth ALL targets */
+				for (uint8_t i = 0; i < s_attack_target_count; i++) {
+					wifi_esp_deauth_start(s_attack_targets[i].bssid,
+									  s_attack_targets[i].channel, NULL, 0);
+					vTaskDelay(pdMS_TO_TICKS(100));
 				}
+				attacking = true;
+			} else {
+				wifi_esp_deauth_stop();
+				attacking = false;
 			}
 		}
 	}
-} // void wifi_config(void)
+}
+
+/*============================================================================*/
+/**
+  * @brief Beacon Spam — broadcast fake AP SSIDs
+  */
+/*============================================================================*/
+void wifi_beacon_spam(void)
+{
+	S_M1_Buttons_Status this_button_status;
+	S_M1_Main_Q_t q_item;
+	BaseType_t ret;
+	bool active = false;
+	uint8_t channel = 6;
+	char ssid_input[33] = "FreeWiFi";
+	uint8_t edit_pos = 0;
+	enum { MODE_CONFIG, MODE_RUNNING } mode = MODE_CONFIG;
+
+	/* Ensure ESP32 is ready */
+	if (!wifi_ensure_esp32_ready()) {
+		wifi_display_msg("ESP32", "not ready!");
+		vTaskDelay(pdMS_TO_TICKS(2000));
+		return;
+	}
+
+	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
+
+	while (1)
+	{
+		if (mode == MODE_CONFIG)
+		{
+			m1_u8g2_firstpage();
+			m1_draw_header_bar(&m1_u8g2, "Beacon Spam", active ? "ON" : "OFF");
+			m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+			u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+
+			char ch_line[24];
+			snprintf(ch_line, sizeof(ch_line), "Ch:%u SSID:", channel);
+			m1_draw_text(&m1_u8g2, 8, 24, 114, ch_line, TEXT_ALIGN_LEFT);
+			m1_draw_text(&m1_u8g2, 8, 34, 114, ssid_input, TEXT_ALIGN_LEFT);
+
+			m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Start", arrowright_8x8);
+			m1_u8g2_nextpage();
+
+			ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+			if (ret != pdTRUE || q_item.q_evt_type != Q_EVENT_KEYPAD) continue;
+			xQueueReceive(button_events_q_hdl, &this_button_status, 0);
+
+			if (this_button_status.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) {
+				if (active) { wifi_esp_beacon_stop(); active = false; }
+				xQueueReset(main_q_hdl); return;
+			}
+			else if (this_button_status.event[BUTTON_UP_KP_ID] == BUTTON_EVENT_CLICK) {
+				if (channel < 14) channel++; else channel = 1;
+			}
+			else if (this_button_status.event[BUTTON_DOWN_KP_ID] == BUTTON_EVENT_CLICK) {
+				if (channel > 1) channel--; else channel = 14;
+			}
+			else if (this_button_status.event[BUTTON_OK_KP_ID] == BUTTON_EVENT_CLICK) {
+				/* Start beacon spam */
+				const char *ssids[] = {ssid_input};
+				if (wifi_esp_beacon_start(ssids, 1, channel) == SUCCESS)
+					active = true;
+				else
+					wifi_display_msg("Beacon", "start failed");
+			}
+			else if (this_button_status.event[BUTTON_RIGHT_KP_ID] == BUTTON_EVENT_CLICK) {
+				if (active) { wifi_esp_beacon_stop(); active = false; }
+			}
+		}
+	}
+}
+
+/*============================================================================*/
+/**
+  * @brief Probe Request Sniffer
+  */
+/*============================================================================*/
+void wifi_probe_sniff(void)
+{
+	S_M1_Buttons_Status this_button_status;
+	S_M1_Main_Q_t q_item;
+	BaseType_t ret;
+	bool active = false;
+	uint8_t channel = 6;
+	int32_t duration = 30;
+	char line1[24];
+
+	/* Ensure ESP32 is ready */
+	if (!wifi_ensure_esp32_ready()) {
+		wifi_display_msg("ESP32", "not ready!");
+		vTaskDelay(pdMS_TO_TICKS(2000));
+		return;
+	}
+
+	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
+
+	while (1)
+	{
+		m1_u8g2_firstpage();
+		m1_draw_header_bar(&m1_u8g2, "Probe Sniff", active ? "LIVE" : "Idle");
+		m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+		u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+
+		snprintf(line1, sizeof(line1), "Ch:%u Dur:%lds", channel, (long)duration);
+		m1_draw_text(&m1_u8g2, 8, 24, 114, line1, TEXT_ALIGN_LEFT);
+		m1_draw_text(&m1_u8g2, 8, 36, 114,
+			active ? "Sniffing probes..." : "OK to start", TEXT_ALIGN_LEFT);
+
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back",
+							active ? "Stop" : "Start", NULL);
+		m1_u8g2_nextpage();
+
+		ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+		if (ret != pdTRUE || q_item.q_evt_type != Q_EVENT_KEYPAD) continue;
+		xQueueReceive(button_events_q_hdl, &this_button_status, 0);
+
+		if (this_button_status.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) {
+			if (active) { wifi_esp_probe_stop(); active = false; }
+			xQueueReset(main_q_hdl); return;
+		}
+		else if (this_button_status.event[BUTTON_UP_KP_ID] == BUTTON_EVENT_CLICK) {
+			if (!active) { if (channel < 14) channel++; else channel = 1; }
+		}
+		else if (this_button_status.event[BUTTON_DOWN_KP_ID] == BUTTON_EVENT_CLICK) {
+			if (!active) { if (channel > 1) channel--; else channel = 14; }
+		}
+		else if (this_button_status.event[BUTTON_OK_KP_ID] == BUTTON_EVENT_CLICK) {
+			if (!active) {
+				if (wifi_esp_probe_start(channel, duration) == SUCCESS)
+					active = true;
+			} else {
+				wifi_esp_probe_stop(); active = false;
+			}
+		}
+	}
+}
+
+/*============================================================================*/
+/**
+  * @brief PMKID Capture
+  */
+/*============================================================================*/
+void wifi_pmkid_capture(void)
+{
+	S_M1_Buttons_Status this_button_status;
+	S_M1_Main_Q_t q_item;
+	BaseType_t ret;
+	char bssid_input[18] = "";
+	uint8_t channel = 6;
+	uint8_t input_pos = 0;
+	enum { MODE_INPUT, MODE_RUNNING } mode = MODE_INPUT;
+
+	/* Ensure ESP32 is ready */
+	if (!wifi_ensure_esp32_ready()) {
+		wifi_display_msg("ESP32", "not ready!");
+		vTaskDelay(pdMS_TO_TICKS(2000));
+		return;
+	}
+
+	/* Auto-fill with first Attack List target if available */
+	if (s_attack_target_count > 0) {
+		strncpy(bssid_input, s_attack_targets[0].bssid, sizeof(bssid_input)-1);
+		bssid_input[sizeof(bssid_input)-1] = '\0';
+		channel = s_attack_targets[0].channel;
+	}
+
+	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
+
+	while (1)
+	{
+		m1_u8g2_firstpage();
+
+		if (mode == MODE_INPUT)
+		{
+			m1_draw_header_bar(&m1_u8g2, "PMKID Capture", "Input");
+			m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+			u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+
+			char ch_line[24];
+			snprintf(ch_line, sizeof(ch_line), "Ch:%u BSSID:", channel);
+			m1_draw_text(&m1_u8g2, 8, 24, 114, ch_line, TEXT_ALIGN_LEFT);
+			m1_draw_text(&m1_u8g2, 8, 36, 114,
+				bssid_input[0] ? bssid_input : "(use scan)", TEXT_ALIGN_LEFT);
+
+			m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Start", NULL);
+		}
+		else
+		{
+			m1_draw_header_bar(&m1_u8g2, "PMKID Capture", "Running");
+			m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+			u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+			m1_draw_text(&m1_u8g2, 8, 30, 114, "Capturing...", TEXT_ALIGN_LEFT);
+			m1_draw_text(&m1_u8g2, 8, 42, 114, "Wait up to 15s", TEXT_ALIGN_LEFT);
+			m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Cancel", NULL, NULL);
+		}
+		m1_u8g2_nextpage();
+
+		ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+		if (ret != pdTRUE || q_item.q_evt_type != Q_EVENT_KEYPAD) continue;
+		xQueueReceive(button_events_q_hdl, &this_button_status, 0);
+
+		if (this_button_status.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) {
+			xQueueReset(main_q_hdl); return;
+		}
+		else if (this_button_status.event[BUTTON_UP_KP_ID] == BUTTON_EVENT_CLICK && mode == MODE_INPUT) {
+			if (channel < 14) channel++; else channel = 1;
+		}
+		else if (this_button_status.event[BUTTON_DOWN_KP_ID] == BUTTON_EVENT_CLICK && mode == MODE_INPUT) {
+			if (channel > 1) channel--; else channel = 14;
+		}
+		else if (this_button_status.event[BUTTON_OK_KP_ID] == BUTTON_EVENT_CLICK && mode == MODE_INPUT) {
+if (bssid_input[0] == ' ') {
+					/* BSSID empty - open keyboard */
+					char bssid_prompt[32];
+					snprintf(bssid_prompt, sizeof(bssid_prompt), "BSSID (AA:BB:CC:DD:EE:FF)");
+					/* Pre-fill with default MAC so cursor works */
+					if (bssid_input[0] == ' ') {
+						strcpy(bssid_input, "00:00:00:00:00:00");
+					}
+					uint8_t len = m1_vkbs_get_data(bssid_prompt, bssid_input);
+					if (len == 0) continue; /* User cancelled */
+					/* Convert to uppercase */
+					for (uint8_t i = 0; i < len && i < sizeof(bssid_input)-1; i++) {
+						if (bssid_input[i] >= 'a' && bssid_input[i] <= 'f') {
+							bssid_input[i] = bssid_input[i] - 'a' + 'A';
+						}
+					}
+					/* Format as MAC address with colons if needed */
+					if (len == 12) { /* AABBCCDDEEFF format */
+						char formatted[18];
+						snprintf(formatted, sizeof(formatted), "%c%c:%c%c:%c%c:%c%c:%c%c:%c%c",
+							bssid_input[0], bssid_input[1], bssid_input[2], bssid_input[3],
+							bssid_input[4], bssid_input[5], bssid_input[6], bssid_input[7],
+							bssid_input[8], bssid_input[9], bssid_input[10], bssid_input[11]);
+						strcpy(bssid_input, formatted);
+					}
+					continue;
+			}
+			mode = MODE_RUNNING;
+			if (wifi_esp_pmkid_capture(bssid_input, channel) == SUCCESS)
+				wifi_display_msg("PMKID", "Captured!");
+			else
+				wifi_display_msg("PMKID", "Not found");
+			vTaskDelay(pdMS_TO_TICKS(2000));
+			mode = MODE_INPUT;
+		}
+	}
+}
+
+/*============================================================================*/
+/**
+  * @brief Karma Attack
+  */
+/*============================================================================*/
+void wifi_karma_attack(void)
+{
+	S_M1_Buttons_Status this_button_status;
+	S_M1_Main_Q_t q_item;
+	BaseType_t ret;
+	bool active = false;
+	uint8_t channel = 6;
+
+	/* Ensure ESP32 is ready */
+	if (!wifi_ensure_esp32_ready()) {
+		wifi_display_msg("ESP32", "not ready!");
+		vTaskDelay(pdMS_TO_TICKS(2000));
+		return;
+	}
+
+	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
+
+	while (1)
+	{
+		m1_u8g2_firstpage();
+		m1_draw_header_bar(&m1_u8g2, "Karma", active ? "ACTIVE" : "Idle");
+		m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+		u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+
+		char ch_line[24];
+		snprintf(ch_line, sizeof(ch_line), "Ch:%u", channel);
+		m1_draw_text(&m1_u8g2, 8, 24, 114, ch_line, TEXT_ALIGN_LEFT);
+		m1_draw_text(&m1_u8g2, 8, 36, 114,
+			active ? "Responding..." : "OK to start", TEXT_ALIGN_LEFT);
+
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back",
+							active ? "Stop" : "Start", NULL);
+		m1_u8g2_nextpage();
+
+		ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+		if (ret != pdTRUE || q_item.q_evt_type != Q_EVENT_KEYPAD) continue;
+		xQueueReceive(button_events_q_hdl, &this_button_status, 0);
+
+		if (this_button_status.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) {
+			if (active) { wifi_esp_karma_stop(); active = false; }
+			xQueueReset(main_q_hdl); return;
+		}
+		else if (this_button_status.event[BUTTON_UP_KP_ID] == BUTTON_EVENT_CLICK && !active) {
+			if (channel < 14) channel++; else channel = 1;
+		}
+		else if (this_button_status.event[BUTTON_DOWN_KP_ID] == BUTTON_EVENT_CLICK && !active) {
+			if (channel > 1) channel--; else channel = 14;
+		}
+		else if (this_button_status.event[BUTTON_OK_KP_ID] == BUTTON_EVENT_CLICK) {
+			if (!active) {
+				if (wifi_esp_karma_start(channel) == SUCCESS)
+					active = true;
+			} else {
+				wifi_esp_karma_stop(); active = false;
+			}
+		}
+	}
+}
+
+/*============================================================================*/
+/**
+  * @brief Handshake Capture (deauth + EAPOL grab)
+  */
+/*============================================================================*/
+void wifi_handshake_capture(void)
+{
+	S_M1_Buttons_Status this_button_status;
+	S_M1_Main_Q_t q_item;
+	BaseType_t ret;
+	char bssid_input[18] = "";
+	uint8_t channel = 6;
+	int32_t deauth_count = 5;
+	enum { MODE_INPUT, MODE_RUNNING } mode = MODE_INPUT;
+
+	/* Ensure ESP32 is ready */
+	if (!wifi_ensure_esp32_ready()) {
+		wifi_display_msg("ESP32", "not ready!");
+		vTaskDelay(pdMS_TO_TICKS(2000));
+		return;
+	}
+
+	/* Auto-fill with first Attack List target if available */
+	if (s_attack_target_count > 0) {
+		strncpy(bssid_input, s_attack_targets[0].bssid, sizeof(bssid_input)-1);
+		bssid_input[sizeof(bssid_input)-1] = '\0';
+		channel = s_attack_targets[0].channel;
+	}
+
+	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
+
+	while (1)
+	{
+		m1_u8g2_firstpage();
+
+		if (mode == MODE_INPUT)
+		{
+			m1_draw_header_bar(&m1_u8g2, "HS Capture", "Setup");
+			m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+			u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+
+			char line[24];
+			snprintf(line, sizeof(line), "Ch:%u Deauth:%ld", channel, (long)deauth_count);
+			m1_draw_text(&m1_u8g2, 8, 24, 114, line, TEXT_ALIGN_LEFT);
+			m1_draw_text(&m1_u8g2, 8, 36, 114,
+				bssid_input[0] ? bssid_input : "BSSID: (scan)", TEXT_ALIGN_LEFT);
+
+			m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Start", arrowright_8x8);
+		}
+		else
+		{
+			m1_draw_header_bar(&m1_u8g2, "HS Capture", "Capturing");
+			m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+			u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+			m1_draw_text(&m1_u8g2, 8, 28, 114, "Deauthing &", TEXT_ALIGN_LEFT);
+			m1_draw_text(&m1_u8g2, 8, 38, 114, "grabbing EAPOL...", TEXT_ALIGN_LEFT);
+			m1_draw_text(&m1_u8g2, 8, 48, 114, "Wait up to 30s", TEXT_ALIGN_LEFT);
+			m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Cancel", NULL, NULL);
+		}
+		m1_u8g2_nextpage();
+
+		ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+		if (ret != pdTRUE || q_item.q_evt_type != Q_EVENT_KEYPAD) continue;
+		xQueueReceive(button_events_q_hdl, &this_button_status, 0);
+
+		if (this_button_status.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) {
+			xQueueReset(main_q_hdl); return;
+		}
+		else if (this_button_status.event[BUTTON_UP_KP_ID] == BUTTON_EVENT_CLICK && mode == MODE_INPUT) {
+			if (channel < 14) channel++; else channel = 1;
+		}
+		else if (this_button_status.event[BUTTON_DOWN_KP_ID] == BUTTON_EVENT_CLICK && mode == MODE_INPUT) {
+			if (channel > 1) channel--; else channel = 14;
+		}
+		else if (this_button_status.event[BUTTON_RIGHT_KP_ID] == BUTTON_EVENT_CLICK && mode == MODE_INPUT) {
+			/* Adjust deauth count */
+			deauth_count += 5;
+			if (deauth_count > 50) deauth_count = 1;
+		}
+		else if (this_button_status.event[BUTTON_OK_KP_ID] == BUTTON_EVENT_CLICK && mode == MODE_INPUT) {
+if (bssid_input[0] == ' ') {
+					/* BSSID empty - open keyboard */
+					char bssid_prompt[32];
+					snprintf(bssid_prompt, sizeof(bssid_prompt), "BSSID (AA:BB:CC:DD:EE:FF)");
+					/* Pre-fill with default MAC so cursor works */
+					if (bssid_input[0] == ' ') {
+						strcpy(bssid_input, "00:00:00:00:00:00");
+					}
+					uint8_t len = m1_vkbs_get_data(bssid_prompt, bssid_input);
+					if (len == 0) continue; /* User cancelled */
+					/* Convert to uppercase */
+					for (uint8_t i = 0; i < len && i < sizeof(bssid_input)-1; i++) {
+						if (bssid_input[i] >= 'a' && bssid_input[i] <= 'f') {
+							bssid_input[i] = bssid_input[i] - 'a' + 'A';
+						}
+					}
+					/* Format as MAC address with colons if needed */
+					if (len == 12) { /* AABBCCDDEEFF format */
+						char formatted[18];
+						snprintf(formatted, sizeof(formatted), "%c%c:%c%c:%c%c:%c%c:%c%c:%c%c",
+							bssid_input[0], bssid_input[1], bssid_input[2], bssid_input[3],
+							bssid_input[4], bssid_input[5], bssid_input[6], bssid_input[7],
+							bssid_input[8], bssid_input[9], bssid_input[10], bssid_input[11]);
+						strcpy(bssid_input, formatted);
+					}
+					continue;
+			}
+			mode = MODE_RUNNING;
+			if (wifi_esp_hscap_start(bssid_input, channel, deauth_count) == SUCCESS)
+				wifi_display_msg("HS Capture", "Got frames!");
+			else
+				wifi_display_msg("HS Capture", "Timeout");
+			vTaskDelay(pdMS_TO_TICKS(2000));
+			mode = MODE_INPUT;
+		}
+	}
+}
+
+/*============================================================================*/
+/**
+  * @brief Standalone Deauth Flood tool
+  */
+/*============================================================================*/
+void wifi_deauth_flood(void)
+{
+	S_M1_Buttons_Status this_button_status;
+	S_M1_Main_Q_t q_item;
+	BaseType_t ret;
+	bool active = false;
+	char bssid_input[18] = "";
+	uint8_t channel = 6;
+	uint8_t target_idx = 0; /* Which Attack List target is selected */
+	enum { MODE_INPUT, MODE_RUNNING } mode = MODE_INPUT;
+	
+	/* Ensure ESP32 is ready */
+	if (!wifi_ensure_esp32_ready()) {
+		wifi_display_msg("ESP32", "not ready!");
+		vTaskDelay(pdMS_TO_TICKS(2000));
+		return;
+	}
+	
+	/* Auto-fill with first Attack List target if available */
+	if (s_attack_target_count > 0) {
+		target_idx = 0;
+		strncpy(bssid_input, s_attack_targets[target_idx].bssid, sizeof(bssid_input)-1);
+		bssid_input[sizeof(bssid_input)-1] = '\0';
+		channel = s_attack_targets[target_idx].channel;
+	}
+
+	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
+
+	while (1)
+	{
+		m1_u8g2_firstpage();
+
+		if (mode == MODE_INPUT)
+		{
+			m1_draw_header_bar(&m1_u8g2, "Deauth Flood", "Setup");
+			m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+			u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+
+			char ch_line[24];
+			snprintf(ch_line, sizeof(ch_line), "Ch:%u BSSID:", channel);
+			m1_draw_text(&m1_u8g2, 8, 24, 114, ch_line, TEXT_ALIGN_LEFT);
+			m1_draw_text(&m1_u8g2, 8, 36, 114,
+				bssid_input[0] ? bssid_input : "(use scan)", TEXT_ALIGN_LEFT);
+
+			m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Start", NULL);
+		}
+		else
+		{
+			m1_draw_header_bar(&m1_u8g2, "Deauth Flood", "ACTIVE");
+			m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+			u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+			m1_draw_text(&m1_u8g2, 8, 28, 114, bssid_input, TEXT_ALIGN_LEFT);
+			m1_draw_text(&m1_u8g2, 8, 40, 114, "Flooding...", TEXT_ALIGN_LEFT);
+			m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Stop", NULL, NULL);
+		}
+		m1_u8g2_nextpage();
+
+		ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+		if (ret != pdTRUE || q_item.q_evt_type != Q_EVENT_KEYPAD) continue;
+		xQueueReceive(button_events_q_hdl, &this_button_status, 0);
+
+		if (this_button_status.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) {
+			if (active) { wifi_esp_deauth_stop(); active = false; }
+			xQueueReset(main_q_hdl); return;
+		}
+		else if (this_button_status.event[BUTTON_UP_KP_ID] == BUTTON_EVENT_CLICK && mode == MODE_INPUT) {
+			if (channel < 14) channel++; else channel = 1;
+		}
+		else if (this_button_status.event[BUTTON_DOWN_KP_ID] == BUTTON_EVENT_CLICK && mode == MODE_INPUT) {
+			if (channel > 1) channel--; else channel = 14;
+		}
+		else if (this_button_status.event[BUTTON_OK_KP_ID] == BUTTON_EVENT_CLICK) {
+			if (mode == MODE_INPUT) {
+				if (bssid_input[0] == '\0') {
+					/* BSSID empty - open keyboard */
+					char bssid_prompt[32];
+					snprintf(bssid_prompt, sizeof(bssid_prompt), "BSSID (AA:BB:CC:DD:EE:FF)");
+					/* Pre-fill with default MAC so cursor works */
+					if (bssid_input[0] == '\0') {
+						strcpy(bssid_input, "00:00:00:00:00:00");
+					}
+					uint8_t len = m1_vkbs_get_data(bssid_prompt, bssid_input);
+					if (len == 0) continue; /* User cancelled */
+					/* Convert to uppercase */
+					for (uint8_t i = 0; i < len && i < sizeof(bssid_input)-1; i++) {
+						if (bssid_input[i] >= 'a' && bssid_input[i] <= 'f') {
+							bssid_input[i] = bssid_input[i] - 'a' + 'A';
+						}
+					}
+					/* Format as MAC address with colons if needed */
+					if (len == 12) { /* AABBCCDDEEFF format */
+						char formatted[18];
+						snprintf(formatted, sizeof(formatted), "%c%c:%c%c:%c%c:%c%c:%c%c:%c%c",
+							bssid_input[0], bssid_input[1], bssid_input[2], bssid_input[3],
+							bssid_input[4], bssid_input[5], bssid_input[6], bssid_input[7],
+							bssid_input[8], bssid_input[9], bssid_input[10], bssid_input[11]);
+						strcpy(bssid_input, formatted);
+					}
+					continue;
+				}
+				wifi_esp_deauth_start(bssid_input, channel, NULL, 0);
+				active = true;
+				mode = MODE_RUNNING;
+			} else {
+				wifi_esp_deauth_stop(); active = false;
+				mode = MODE_INPUT;
+			}
+		}
+	}
+}
+
+#endif /* M1_APP_WIFI_OFFENSIVE_ENABLE */
 
 #endif /* M1_APP_WIFI_CONNECT_ENABLE */

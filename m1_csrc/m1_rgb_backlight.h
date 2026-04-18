@@ -17,8 +17,8 @@
 
 #include <stdint.h>
 
-/* Number of SK6805 LEDs in the backlight strip */
-#define RGB_BL_LED_COUNT   3U
+/* Number of SK6805 LEDs in the backlight strip — RGB mod uses 2 LEDs */
+#define RGB_BL_LED_COUNT   2U
 
 /* Color mode enumeration */
 typedef enum
@@ -48,6 +48,8 @@ typedef enum
 
 void rgb_bl_init(void);
 void rgb_bl_deinit(void);
+uint8_t rgb_bl_detect(void);  /* Returns 1 if RGB mod hardware detected (PD3 pulled up) */
+uint8_t rgb_bl_is_available(void); /* Returns 1 if RGB mod was detected at boot */
 void rgb_bl_set_mode(rgb_bl_mode_t mode);
 void rgb_bl_set_effect(rgb_bl_effect_t effect);
 void rgb_bl_set_brightness(uint8_t brightness);
@@ -64,5 +66,9 @@ uint8_t          rgb_bl_is_on(void);
 
 const char *rgb_bl_mode_name(rgb_bl_mode_t mode);
 const char *rgb_bl_effect_name(rgb_bl_effect_t effect);
+
+/* Unified backlight API — routes to LP5814 or RGB mod automatically */
+void m1_backlight_on(uint8_t brightness);
+void m1_backlight_off(void);
 
 #endif /* M1_RGB_BACKLIGHT_H_ */

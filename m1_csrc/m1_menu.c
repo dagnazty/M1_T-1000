@@ -222,15 +222,15 @@ S_M1_Menu_t menu_NFC_Import =
 
 S_M1_Menu_t menu_NFC =
 {
-    "NFC", &menu_nfc_init, menu_nfc_deinit, NULL, 8, 0, menu_m1_icon_nfc, NULL,
-    {&menu_NFC_Read, &menu_NFC_Fast_Read, &menu_NFC_Saved, &menu_NFC_Add_Manually, &menu_NFC_Import,
+    "NFC", &menu_nfc_init, menu_nfc_deinit, NULL, 7, 0, menu_m1_icon_nfc, NULL,
+    {&menu_NFC_Read, &menu_NFC_Saved, &menu_NFC_Add_Manually, &menu_NFC_Import,
      &menu_NFC_Extra_Actions, &menu_NFC_Tools, &menu_NFC_Detect_Reader}
 };
 #else
 S_M1_Menu_t menu_NFC =
 {
-    "NFC", &menu_nfc_init, menu_nfc_deinit, NULL, 7, 0, menu_m1_icon_nfc, NULL,
-    {&menu_NFC_Read, &menu_NFC_Fast_Read, &menu_NFC_Saved, &menu_NFC_Add_Manually,
+    "NFC", &menu_nfc_init, menu_nfc_deinit, NULL, 6, 0, menu_m1_icon_nfc, NULL,
+    {&menu_NFC_Read, &menu_NFC_Saved, &menu_NFC_Add_Manually,
      &menu_NFC_Extra_Actions, &menu_NFC_Tools, &menu_NFC_Detect_Reader}
 };
 #endif
@@ -382,6 +382,11 @@ S_M1_Menu_t menu_Setting_ESP32_C6_Reset =
 
 /*---------------------- > Settings-ESP32 Update-End ----------------------*/
 
+S_M1_Menu_t menu_Settings_Backlight =
+{
+    "Backlight", settings_backlight, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+
 S_M1_Menu_t menu_Settings_LCD_and_Notifications =
 {
     "LCD and Notifications", settings_lcd_and_notifications, NULL, NULL, 0, 0, NULL, NULL, NULL
@@ -467,12 +472,84 @@ S_M1_Menu_t menu_Wifi_Disconnect =
     "Disconnect", wifi_disconnect, NULL, NULL, 0, 0, NULL, NULL, NULL
 };
 
+#ifdef M1_APP_WIFI_OFFENSIVE_ENABLE
+/* Attack List is a LEAF — selecting it runs wifi_attack_list() which shows
+   targets added from the scan menu, and opens a per-target actions sub-menu. */
+S_M1_Menu_t menu_Wifi_Attack_List =
+{
+    "Attack List", wifi_attack_list, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+
+/* Standalone offensive tools (manual BSSID/channel entry) live under their
+   own submenu, separate from Attack List. */
+extern S_M1_Menu_t menu_Wifi_Deauth_Flood;
+extern S_M1_Menu_t menu_Wifi_Beacon_Spam;
+extern S_M1_Menu_t menu_Wifi_Probe_Sniff;
+extern S_M1_Menu_t menu_Wifi_PMKID_Capture;
+extern S_M1_Menu_t menu_Wifi_Karma;
+extern S_M1_Menu_t menu_Wifi_Handshake_Capture;
+
+S_M1_Menu_t menu_Wifi_Deauth_Flood =
+{
+    "Deauth Flood", wifi_deauth_flood, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+
+S_M1_Menu_t menu_Wifi_Beacon_Spam =
+{
+    "Beacon Spam", wifi_beacon_spam, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+
+S_M1_Menu_t menu_Wifi_Probe_Sniff =
+{
+    "Probe Sniff", wifi_probe_sniff, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+
+S_M1_Menu_t menu_Wifi_PMKID_Capture =
+{
+    "PMKID Capture", wifi_pmkid_capture, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+
+S_M1_Menu_t menu_Wifi_Karma =
+{
+    "Karma Attack", wifi_karma_attack, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+
+S_M1_Menu_t menu_Wifi_Handshake_Capture =
+{
+    "HS Capture", wifi_handshake_capture, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+
+S_M1_Menu_t menu_Wifi_Offensive_Tools =
+{
+    .title = "Offensive Tools",
+    .sub_func = menu_wifi_offensive_init,
+    .deinit_func = NULL,
+    .xkey_handler = NULL,
+    .num_submenu_items = 6,
+    .reserved = 0,
+    .icon_ptr = NULL,
+    .gui_menu_update = NULL,
+    .submenu = {&menu_Wifi_Deauth_Flood, &menu_Wifi_Beacon_Spam,
+                &menu_Wifi_Probe_Sniff, &menu_Wifi_PMKID_Capture,
+                &menu_Wifi_Karma, &menu_Wifi_Handshake_Capture}
+};
+#endif /* M1_APP_WIFI_OFFENSIVE_ENABLE */
+
 S_M1_Menu_t menu_Wifi =
 {
+#ifdef M1_APP_WIFI_OFFENSIVE_ENABLE
+    "WiFi 2.4G", menu_wifi_init, NULL, NULL, 13, 0, menu_m1_icon_wifi, NULL,
+#else
     "WiFi 2.4G", menu_wifi_init, NULL, NULL, 11, 0, menu_m1_icon_wifi, NULL,
+#endif
     {&menu_Wifi_Scan_AP, &menu_Wifi_Survey, &menu_Wifi_Health, &menu_802154_Zigbee,
      &menu_802154_Thread, &menu_Wifi_Config, &menu_Wifi_Sync_RTC,
-     &menu_Wifi_Status, &menu_Wifi_Mode, &menu_Wifi_Stats, &menu_Wifi_Disconnect}
+     &menu_Wifi_Status, &menu_Wifi_Mode, &menu_Wifi_Stats, &menu_Wifi_Disconnect,
+#ifdef M1_APP_WIFI_OFFENSIVE_ENABLE
+     &menu_Wifi_Attack_List,
+     &menu_Wifi_Offensive_Tools
+#endif
+    }
 };
 #else
 S_M1_Menu_t menu_Wifi =
@@ -628,9 +705,9 @@ S_M1_Menu_t menu_RGBBacklight =
 
 S_M1_Menu_t menu_Apps =
 {
-    "Apps", NULL, NULL, NULL, 9, 0, menu_m1_icon_apps, NULL,
+    "Apps", NULL, NULL, NULL, 8, 0, menu_m1_icon_apps, NULL,
     {&menu_DabTimer, &menu_DvdLogo, &menu_SystemDashboard, &menu_FileTools,
-     &menu_ESP32Link, &menu_Clock, &menu_HexViewer, &menu_RGBBacklight, &menu_Apps_Browser}
+     &menu_ESP32Link, &menu_Clock, &menu_HexViewer, &menu_Apps_Browser}
 };
 #endif /* M1_APP_APPS_ENABLE */
 

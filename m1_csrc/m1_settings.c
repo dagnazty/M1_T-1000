@@ -31,6 +31,8 @@
 #include "m1_t1000_version.h"
 #include "m1_system.h"
 #include "m1_file_util.h"
+#include "m1_rgb_backlight.h"
+#include "m1_builtin_apps.h"
 
 /*************************** D E F I N E S ************************************/
 
@@ -46,14 +48,13 @@
 #define ABOUT_BOX_Y_POS_ROW_4			40
 #define ABOUT_BOX_Y_POS_ROW_5			50
 
-/* LCD & Notifications menu items */
-#define LCD_SETTINGS_ITEMS   6
-#define LCD_SET_BRIGHTNESS   0
-#define LCD_SET_BUZZER       1
-#define LCD_SET_LED          2
-#define LCD_SET_ORIENT       3
-#define LCD_SET_SLEEP        4
-#define LCD_SET_TIMEZONE     5
+/* LCD & Notifications menu items (backlight moved to System > Backlight) */
+#define LCD_SETTINGS_ITEMS   5
+#define LCD_SET_BUZZER       0
+#define LCD_SET_LED          1
+#define LCD_SET_ORIENT       2
+#define LCD_SET_SLEEP        3
+#define LCD_SET_TIMEZONE     4
 
 //************************** S T R U C T U R E S *******************************
 
@@ -63,6 +64,10 @@ static const uint8_t s_brightness_values[] = { 0, 64, 128, 192, 255 };
 static const char *s_brightness_text[] = { "Off", "Low", "Med", "High", "Max" };
 static const char *s_orient_text[] = { "Normal", "Southpaw", "Remote" };
 static const char *s_sleep_text[] = { "30s", "1 min", "5 min", "10 min", "15 min", "Never" };
+static const char *s_bl_type_text[] = { "Stock", "RGB" };
+
+/* Backlight type: 0=Stock (LP5814), 1=RGB (SK6805 mod) — saved to settings.cfg */
+uint8_t m1_backlight_type = 0;
 
 /********************* F U N C T I O N   P R O T O T Y P E S ******************/
 
@@ -113,7 +118,6 @@ static const char *settings_lcd_item_label(uint8_t item)
 {
     switch (item)
     {
-        case LCD_SET_BRIGHTNESS: return "Brightness";
         case LCD_SET_BUZZER:     return "Buzzer";
         case LCD_SET_LED:        return "LED Notify";
         case LCD_SET_ORIENT:     return "Orientation";
@@ -127,7 +131,6 @@ static const char *settings_lcd_item_value(uint8_t item)
 {
     switch (item)
     {
-        case LCD_SET_BRIGHTNESS: return s_brightness_text[m1_brightness_level];
         case LCD_SET_BUZZER:     return m1_buzzer_on ? "On" : "Off";
         case LCD_SET_LED:        return m1_led_notify_on ? "On" : "Off";
         case LCD_SET_ORIENT:     return s_orient_text[m1_screen_orientation];
@@ -244,12 +247,7 @@ void settings_lcd_and_notifications(void)
         /* Left — decrement selected setting */
         if (this_button_status.event[BUTTON_LEFT_KP_ID] == BUTTON_EVENT_CLICK)
         {
-            if (sel == LCD_SET_BRIGHTNESS)
-            {
-                m1_brightness_level = (m1_brightness_level == 0) ? 4 : (m1_brightness_level - 1);
-                lp5814_backlight_on(s_brightness_values[m1_brightness_level]);
-            }
-            else if (sel == LCD_SET_BUZZER)
+            if (sel == LCD_SET_BUZZER)
                 m1_buzzer_on = !m1_buzzer_on;
             else if (sel == LCD_SET_LED)
                 m1_led_notify_on = !m1_led_notify_on;
@@ -265,12 +263,7 @@ void settings_lcd_and_notifications(void)
         /* Right — increment selected setting */
         if (this_button_status.event[BUTTON_RIGHT_KP_ID] == BUTTON_EVENT_CLICK)
         {
-            if (sel == LCD_SET_BRIGHTNESS)
-            {
-                m1_brightness_level = (m1_brightness_level >= 4) ? 0 : (m1_brightness_level + 1);
-                lp5814_backlight_on(s_brightness_values[m1_brightness_level]);
-            }
-            else if (sel == LCD_SET_BUZZER)
+            if (sel == LCD_SET_BUZZER)
             {
                 m1_buzzer_on = !m1_buzzer_on;
                 if (m1_buzzer_on) m1_buzzer_notification();
@@ -285,17 +278,14 @@ void settings_lcd_and_notifications(void)
                 m1_tz_offset_hours = (m1_tz_offset_hours >= 14) ? -12 : (m1_tz_offset_hours + 1);
             needs_redraw = 1;
         }
-    }
-}
 
+        /* OK — no special action in LCD & Notifications */
+    } /* while (1) */
+} /* settings_lcd_and_notifications */
 
 
 /*============================================================================*/
 /**
-  * @brief
-  * @param
-  * @retval
-  */
 /*============================================================================*/
 void settings_buzzer(void)
 {
@@ -536,6 +526,16 @@ void settings_save_to_sd(void)
     snprintf(buf, sizeof(buf), "ism_region=%d\n", m1_device_stat.config.ism_band_region);
     f_write(&fp, buf, strlen(buf), &bw);
 
+    snprintf(buf, sizeof(buf), "backlight_type=%d\n", m1_backlight_type);
+    f_write(&fp, buf, strlen(buf), &bw);
+
+    snprintf(buf, sizeof(buf), "rgb_mode=%d\n", (int)rgb_bl_get_mode());
+    f_write(&fp, buf, strlen(buf), &bw);
+    snprintf(buf, sizeof(buf), "rgb_effect=%d\n", (int)rgb_bl_get_effect());
+    f_write(&fp, buf, strlen(buf), &bw);
+    snprintf(buf, sizeof(buf), "rgb_brightness=%d\n", (int)rgb_bl_get_brightness());
+    f_write(&fp, buf, strlen(buf), &bw);
+
 #ifdef M1_APP_BADBT_ENABLE
     snprintf(buf, sizeof(buf), "badbt_name=%s\n", m1_badbt_name);
     f_write(&fp, buf, strlen(buf), &bw);
@@ -645,6 +645,42 @@ void settings_load_from_sd(void)
             m1_device_stat.config.ism_band_region = (uint8_t)val;
     }
 
+    /* Parse "backlight_type=X" */
+    p = strstr(buf, "backlight_type=");
+    if (p != NULL)
+    {
+        val = (int)(*(p + 15) - '0');
+        if (val == 0 || val == 1)
+            m1_backlight_type = (uint8_t)val;
+    }
+
+    /* Parse "rgb_mode=X" */
+    p = strstr(buf, "rgb_mode=");
+    if (p != NULL)
+    {
+        val = (int)(*(p + 9) - '0');
+        if (val >= 0 && val < RGB_MODE_COUNT)
+            rgb_bl_set_mode((rgb_bl_mode_t)val);
+    }
+
+    /* Parse "rgb_effect=X" */
+    p = strstr(buf, "rgb_effect=");
+    if (p != NULL)
+    {
+        val = (int)(*(p + 11) - '0');
+        if (val >= 0 && val < RGB_EFFECT_COUNT)
+            rgb_bl_set_effect((rgb_bl_effect_t)val);
+    }
+
+    /* Parse "rgb_brightness=X" */
+    p = strstr(buf, "rgb_brightness=");
+    if (p != NULL)
+    {
+        val = atoi(p + 15);
+        if (val >= 0 && val <= 255)
+            rgb_bl_set_brightness((uint8_t)val);
+    }
+
     /* Legacy: migrate "southpaw=1" if no orientation key found */
     if (strstr(buf, "orientation=") == NULL)
     {
@@ -672,8 +708,15 @@ void settings_load_from_sd(void)
 #endif
 
 apply:
-    /* Apply brightness */
-    lp5814_backlight_on(s_brightness_values[m1_brightness_level]);
+    /* Apply backlight */
+    m1_backlight_on(s_brightness_values[m1_brightness_level]);
+
+    /* If RGB type selected, init the RGB hardware */
+    if (m1_backlight_type == 1)
+    {
+        rgb_bl_init();
+        rgb_bl_on();
+    }
 
     /* Apply orientation */
     settings_apply_orientation(m1_screen_orientation);
@@ -702,5 +745,105 @@ void settings_ensure_sd_folders(void)
     for (uint8_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++)
     {
         fs_directory_ensure(dirs[i]);
+    }
+}
+
+/*============================================================================*/
+/**
+  * @brief  Standalone Backlight menu — Type toggle + OK launches Stock/RGB app
+  */
+/*============================================================================*/
+#define BL_MENU_ITEMS   1
+#define BL_MENU_TYPE    0
+#define BL_POLL_MS      120U
+
+static void backlight_menu_draw(uint8_t sel)
+{
+    char badge[8];
+    snprintf(badge, sizeof(badge), "%u/%u", (unsigned)(sel + 1U), (unsigned)BL_MENU_ITEMS);
+
+    m1_u8g2_firstpage();
+    u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+    m1_draw_header_bar(&m1_u8g2, "Backlight", badge);
+    m1_draw_content_frame(&m1_u8g2, 2, 14, 124, 35);
+    u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
+
+    const char *label = "Type";
+    const char *value = s_bl_type_text[m1_backlight_type];
+    uint8_t y = 30;
+
+    if (sel == BL_MENU_TYPE)
+    {
+        u8g2_DrawBox(&m1_u8g2, 6, y - 7, 114, 11);
+        u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
+        u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_B);
+        m1_draw_text(&m1_u8g2, 10, y, 64, label, TEXT_ALIGN_LEFT);
+        m1_draw_text(&m1_u8g2, 78, y, 38, value, TEXT_ALIGN_RIGHT);
+        u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+        u8g2_SetFont(&m1_u8g2, M1_DISP_SUB_MENU_FONT_N);
+    }
+    else
+    {
+        u8g2_DrawFrame(&m1_u8g2, 6, y - 7, 114, 11);
+        m1_draw_text(&m1_u8g2, 10, y, 64, label, TEXT_ALIGN_LEFT);
+        m1_draw_text(&m1_u8g2, 78, y, 38, value, TEXT_ALIGN_RIGHT);
+    }
+
+    m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "OK=Edit", arrowright_8x8);
+    m1_u8g2_nextpage();
+}
+
+void settings_backlight(void)
+{
+    S_M1_Buttons_Status this_button_status;
+    S_M1_Main_Q_t q_item;
+    BaseType_t ret;
+
+    uint8_t sel = 0;
+    uint8_t needs_redraw = 1;
+
+    while (1)
+    {
+        if (needs_redraw)
+        {
+            needs_redraw = 0;
+            backlight_menu_draw(sel);
+        }
+
+        ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+        if (ret != pdTRUE) continue;
+        if (q_item.q_evt_type != Q_EVENT_KEYPAD) continue;
+
+        ret = xQueueReceive(button_events_q_hdl, &this_button_status, 0);
+        if (ret != pdTRUE) continue;
+
+        /* Back — save and exit */
+        if (this_button_status.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK)
+        {
+            settings_save_to_sd();
+            xQueueReset(main_q_hdl);
+            break;
+        }
+
+        /* Left/Right — toggle type */
+        if (this_button_status.event[BUTTON_LEFT_KP_ID] == BUTTON_EVENT_CLICK ||
+            this_button_status.event[BUTTON_RIGHT_KP_ID] == BUTTON_EVENT_CLICK)
+        {
+            if (sel == BL_MENU_TYPE)
+            {
+                m1_backlight_type = m1_backlight_type ? 0 : 1;
+                needs_redraw = 1;
+            }
+        }
+
+        /* OK — launch the appropriate backlight app */
+        if (this_button_status.event[BUTTON_OK_KP_ID] == BUTTON_EVENT_CLICK)
+        {
+            if (m1_backlight_type == 1)
+                app_rgb_backlight_run();
+            else
+                app_stock_backlight_run();
+            needs_redraw = 1;
+        }
     }
 }
