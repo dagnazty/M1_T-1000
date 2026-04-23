@@ -27,6 +27,8 @@
 #include "m1_md5_hash.h"
 #include "m1_fw_update_bl.h"
 #include "m1_power_ctl.h"
+#include "m1_watchdog.h"
+#include "m1_log_debug.h"
 
 /*************************** D E F I N E S ************************************/
 
@@ -307,6 +309,7 @@ void setting_esp32_image_file(void)
 					}
 					sum -= count;
 					mh_md5_update(payload, (count + 3) & ~3);
+					m1_wdt_reset();
 				} // while ( sum )
 
 				if ( !sum )
@@ -335,6 +338,7 @@ void setting_esp32_image_file(void)
 			uret = M1_FW_IMAGE_FILE_ACCESS_ERROR;
 			break;
 		}
+		M1_LOG_I("ESP32", "File OK size=%lu\r\n", (unsigned long)image_size);
     } while (0);
 
     if ( esp32_update_status==M1_FW_UPDATE_READY )
@@ -384,28 +388,28 @@ void setting_esp32_firmware_update(void)
     	uret = M1_FW_UPDATE_LOW_BATTERY;
     } // if ( !m1_check_battery_level(50) )
 
-	old_op_mode = m1_device_stat.op_mode;
+    old_op_mode = m1_device_stat.op_mode;
 
     do
     {
         if ( esp32_update_status!=M1_FW_UPDATE_READY )
         {
-        	// Auto-launch file browser so user doesn't have to select Image File first
         	setting_esp32_image_file();
         	if ( esp32_update_status!=M1_FW_UPDATE_READY )
         		break;
         }
-		//
-		// - Check for battery status before proceeding
-		// - Write status to RTC backup registers. If something goes wrong and causes reboot,
-		// the device will read the status from those registers after reset.
-		//
 
         m1_device_stat.op_mode = M1_OPERATION_MODE_FIRMWARE_UPDATE;
+        m1_wdt_pause();
 
         m1_led_fw_update_on(NULL); // Turn on
-		esp32_UART_deinit(); // Disable the ESP32 module first
+
+        HAL_NVIC_DisableIRQ(EXTI1_IRQn);
+        HAL_NVIC_DisableIRQ(EXTI7_IRQn);
+
+        M1_LOG_I("ESP32", "Flash start size=%lu addr=0x%06lX\r\n", (unsigned long)image_size, start_address);
     	uret = m1_fw_app(&hfile_fw);
+        M1_LOG_I("ESP32", "Flash result=%d\r\n", uret);
 		if ( uret != ESP_LOADER_SUCCESS )
 		{
 			uret = M1_FW_UPDATE_FAILED;
@@ -418,28 +422,28 @@ void setting_esp32_firmware_update(void)
 		m1_led_fw_update_off(); // Turn off
     } while (0);
 
-    esp32_update_status = uret;
+    if ( uret != M1_FW_UPDATE_NOT_READY )
+    	esp32_update_status = uret;
 
 	if ( (uret==M1_FW_UPDATE_SUCCESS) || (uret==M1_FW_UPDATE_FAILED) )
 	{
-		esp32_UART_change_baudrate(ESP32_UART_BAUDRATE); // Change to ESP32 default baud rate
+		esp32_UART_change_baudrate(ESP32_UART_BAUDRATE);
 		m1_ringbuffer_reset(&esp32_rb_hdl);
-		esp_loader_reset_target(); // Reset ESP32 to get the boot message
+		esp_loader_reset_target();
 
-		// Delay for skipping the boot message of the targets
 		HAL_Delay(100);
-		esp32_UART_deinit(); // Disable UART GPIO after update process is done
+		esp32_UART_deinit();
 
-		// Force full ESP32 re-init so SPI/AT mode is restored on next use.
-		// Without this, m1_esp32_init() sees esp32_init_done=true and skips,
-		// and esp32_main_init() sees esp32_main_init_done=true and skips.
-		// The ESP32 is still in UART-bootloader state, not SPI-AT mode.
 		esp32_disable();
 		HAL_Delay(100);
 		esp32_enable();
 		m1_esp32_force_reinit();
 		esp32_main_force_reinit();
-	} // if ( (uret==M1_FW_UPDATE_FAILED) || (uret==M1_FW_UPDATE_SUCCESS) )
+	}
+
+	HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+	HAL_NVIC_EnableIRQ(EXTI7_IRQn);
+	m1_wdt_unpause();
 
 	m1_device_stat.op_mode = old_op_mode;
 
@@ -537,8 +541,6 @@ static esp_loader_error_t m1_fw_app(FIL *hfile)
 	loader_port_stm32_init(&config);
 	esp32_UART_init();
 
-	// Configure the BUTTON_RIGHT to become an output pin
-	// This GPIO is shared with the ESP32 boot-mode pin
 	GPIO_InitStruct.Pin = ESP32_IO9_Pin;
 	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
@@ -547,12 +549,19 @@ static esp_loader_error_t m1_fw_app(FIL *hfile)
 
 	HAL_GPIO_WritePin(ESP32_IO9_GPIO_Port, ESP32_IO9_Pin, GPIO_PIN_SET);
 
-	// Flush stale AT response data before ROM bootloader sync
+	HAL_NVIC_SetPriority(UART4_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY - 1, 0);
+
+	// Flush stale data and wait for ESP32 to settle.
+	// Double-flush clears any in-flight bytes from the previous session.
+	m1_ringbuffer_reset(&esp32_rb_hdl);
+	HAL_Delay(50);
 	m1_ringbuffer_reset(&esp32_rb_hdl);
 
+	M1_LOG_I("ESP32", "Connecting...\r\n");
 	flash_err = ESP_LOADER_ERROR_FAIL;
 	while (connect_to_target(230400)==ESP_LOADER_SUCCESS)
 	{
+		m1_wdt_reset();
 		f_lseek(hfile, 0); // Move file pointer to the beginning of the file
 		//write_size = image_size;
 		progress_percent_count = 0;
@@ -577,6 +586,9 @@ static esp_loader_error_t m1_fw_app(FIL *hfile)
 		flash_err = m1_fw_flash_binary(NULL, 0);
 	    break;
 	} // while (connect_to_target(ESP32_UART_BAUDRATE) == ESP_LOADER_SUCCESS)
+
+	// Restore UART4 priority and re-enable EXTI interrupts
+	HAL_NVIC_SetPriority(UART4_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY, 0);
 
 	// Configure the BUTTON_RIGHT to input again
 	GPIO_InitStruct.Pin = ESP32_IO9_Pin;
@@ -853,16 +865,41 @@ void setting_esp32_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
 		    			} // while ( msg_len )
 		    			break;
 
-		    		case M1_FW_UPDATE_FAILED:
-		    	    	strcpy(line1, "Update failed!");
-		    			break;
+    		case M1_FW_UPDATE_FAILED:
+    	    	strcpy(line1, "Update failed!");
+    			break;
 
-		    		case M1_FW_UPDATE_LOW_BATTERY:
-		    			strcpy(line1, "Battery level < 50%!");
-		    			break;
+    		case M1_FW_UPDATE_LOW_BATTERY:
+    			strcpy(line1, "Battery level < 50%!");
+    			break;
 
-    				default:
-    					break;
+    		case M1_FW_IMAGE_FILE_ACCESS_ERROR:
+    			strcpy(line1, "Image file error!");
+    			break;
+
+    		case M1_FW_CRC_FILE_ACCESS_ERROR:
+    			strcpy(line1, "MD5 file error!");
+    			break;
+
+    		case M1_FW_CRC_FILE_INVALID:
+    			strcpy(line1, "Invalid MD5 file!");
+    			break;
+
+    		case M1_FW_IMAGE_FILE_TYPE_ERROR:
+    		case M1_FW_IMAGE_SIZE_INVALID:
+    			strcpy(line1, "Invalid image file!");
+    			break;
+
+    		case M1_FW_CRC_CHECKSUM_UNMATCHED:
+    			strcpy(line1, "Checksum failed!");
+    			break;
+
+    		case M1_FW_UPDATE_NOT_READY:
+    			strcpy(line1, "Select image file first");
+    			break;
+
+				default:
+					break;
     			} // switch ( esp32_update_status )
     			break;
 

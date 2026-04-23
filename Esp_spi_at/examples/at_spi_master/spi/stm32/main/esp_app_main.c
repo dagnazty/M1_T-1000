@@ -635,6 +635,8 @@ static void init_master_hd(spi_device_handle_t* spi)
     }
     if (retry >= 20) {
         M1_LOG_E(TAG, "ESP32 slave not responding after %d retries\r\n", retry);
+        spi_mutex_unlock();
+        return;
     }
 
     if (recv_opt.direct == SPI_READ) {

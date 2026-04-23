@@ -17,11 +17,19 @@
 
 /*************************** I N C L U D E S **********************************/
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "stm32h5xx_hal.h"
+#include "cmsis_os2.h"
+#include "FreeRTOS.h"
+#include "queue.h"
 #include "main.h"
 #include "m1_field_detect.h"
+#include "m1_system.h"
+#include "m1_display.h"
+#include "m1_lcd.h"
+#include "m1_tasks.h"
 
 /* NFC / RFAL */
 #include "rfal_nfc.h"
@@ -345,4 +353,67 @@ int m1_field_detect_nfc_raw(void)
 int m1_field_detect_nfc_opctl(void)
 {
     return last_nfc_opctl;
+}
+
+/*============================================================================*/
+void field_detect_run(void)
+{
+    S_M1_Buttons_Status this_button_status;
+    S_M1_Main_Q_t q_item;
+    BaseType_t ret;
+    bool nfc_field, rfid_field;
+    char line1[26], line2[26], line3[26];
+
+    m1_u8g2_firstpage();
+    m1_draw_status_panel(&m1_u8g2, "Field Detect", NULL,
+                         NULL, 0, 0,
+                         "Initializing...", NULL, NULL);
+    m1_u8g2_nextpage();
+
+    if (m1_field_detect_start() != 0)
+    {
+        m1_u8g2_firstpage();
+        m1_draw_status_panel(&m1_u8g2, "Field Detect", NULL,
+                             NULL, 0, 0,
+                             "NFC chip error", "RFID ADC only", NULL);
+        m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", NULL, NULL);
+        m1_u8g2_nextpage();
+    }
+
+    while (1)
+    {
+        nfc_field = m1_field_detect_nfc();
+        rfid_field = m1_field_detect_rfid(NULL);
+
+        snprintf(line1, sizeof(line1), "NFC 13.56MHz: %s",
+                 nfc_field ? "DETECTED" : "---");
+        snprintf(line2, sizeof(line2), "RFID 125kHz:  %s",
+                 rfid_field ? "DETECTED" : "---");
+        snprintf(line3, sizeof(line3), "NFC AUX:0x%02X RFID d:%d",
+                 (uint8_t)m1_field_detect_nfc_raw(),
+                 m1_field_detect_rfid_raw());
+
+        m1_u8g2_firstpage();
+        m1_draw_status_panel(&m1_u8g2, "Field Detect", "Live",
+                             NULL, 0, 0,
+                             line1, line2, line3);
+        m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", NULL, NULL);
+        m1_u8g2_nextpage();
+
+        ret = xQueueReceive(main_q_hdl, &q_item, pdMS_TO_TICKS(200));
+        if (ret == pdTRUE)
+        {
+            if (q_item.q_evt_type == Q_EVENT_KEYPAD)
+            {
+                ret = xQueueReceive(button_events_q_hdl, &this_button_status, 0);
+                if (this_button_status.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK)
+                {
+                    xQueueReset(main_q_hdl);
+                    break;
+                }
+            }
+        }
+    }
+
+    m1_field_detect_stop();
 }

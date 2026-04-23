@@ -449,7 +449,7 @@ void gpio_gui_update(const S_M1_Menu_t *phmenu, uint8_t sel_item)
 				break;
 
 			case 3:
-				m1_draw_text(&m1_u8g2, 6, 47, 116, "Please update firmware!",
+				m1_draw_text(&m1_u8g2, 6, 47, 116, "Detect NFC & RFID fields",
 				             TEXT_ALIGN_LEFT);
 				break;
 

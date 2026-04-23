@@ -25,6 +25,7 @@
 #include "esp_app_main.h"
 #include "esp_at_list.h"
 #include "m1_compile_cfg.h"
+#include "m1_system.h"
 
 #ifdef M1_APP_WIFI_CONNECT_ENABLE
 #include "m1_wifi_cred.h"
@@ -52,6 +53,7 @@
 static uint16_t s_current_ap_index = 0;
 static bool s_wifi_connected = false;
 static char s_connected_ssid[SSID_LENGTH];
+static int s_cached_rssi = 0;
 #endif
 
 /********************* F U N C T I O N   P R O T O T Y P E S ******************/
@@ -112,6 +114,21 @@ uint8_t wifi_is_connected(void)
 	return s_wifi_connected ? 1U : 0U;
 #else
 	return 0U;
+#endif
+}
+
+/*============================================================================*/
+/**
+  * @brief  Get cached WiFi RSSI (0 = not connected, negative = dBm)
+  */
+/*============================================================================*/
+int wifi_get_rssi(void)
+{
+#ifdef M1_APP_WIFI_CONNECT_ENABLE
+	if (!s_wifi_connected) return 0;
+	return s_cached_rssi;
+#else
+	return 0;
 #endif
 }
 
@@ -972,7 +989,11 @@ static bool wifi_do_connect(const char *ssid, const char *password)
 		strncpy(s_connected_ssid, ssid, SSID_LENGTH - 1);
 		s_connected_ssid[SSID_LENGTH - 1] = '\0';
 
-		/* Get IP address to display */
+		ctrl_cmd_t stats_req = CTRL_CMD_DEFAULT_REQ();
+		stats_req.cmd_timeout_sec = 5;
+		if (wifi_get_stats(&stats_req) == SUCCESS)
+			s_cached_rssi = stats_req.u.wifi_ap_config.rssi;
+
 		ctrl_cmd_t ip_req = CTRL_CMD_DEFAULT_REQ();
 		ip_req.cmd_timeout_sec = 10;
 		wifi_get_ip(&ip_req);
@@ -995,7 +1016,15 @@ static bool wifi_do_connect(const char *ssid, const char *password)
 		}
 		m1_u8g2_nextpage();
 		M1_LOG_I(M1_LOGDB_TAG, "Connected to %s, IP: %s\n\r", ssid, ip_req.u.wifi_ap_config.status);
-		vTaskDelay(pdMS_TO_TICKS(2500));
+		vTaskDelay(pdMS_TO_TICKS(1000));
+
+		wifi_display_busy("Syncing time...");
+		if (wifi_sync_rtc())
+			wifi_display_msg("Time synced", "via WiFi");
+		else
+			wifi_display_msg("Time sync", "skipped");
+		vTaskDelay(pdMS_TO_TICKS(1500));
+
 		return true;
 	}
 	else
@@ -1846,6 +1875,7 @@ void wifi_disconnect(void)
 	{
 		s_wifi_connected = false;
 		s_connected_ssid[0] = '\0';
+		s_cached_rssi = 0;
 		wifi_display_msg("WiFi", "Disconnected");
 		M1_LOG_I(M1_LOGDB_TAG, "WiFi disconnected\n\r");
 	}
@@ -1879,6 +1909,49 @@ void wifi_disconnect(void)
 
 /*============================================================================*/
 /**
+  * @brief Auto-detect timezone offset via HTTP API
+  * @retval timezone offset (-12..+14), or 127 on failure
+  */
+/*============================================================================*/
+static int8_t wifi_auto_tz(void)
+{
+	char resp[768];
+	int8_t tz = 127;
+
+	memset(resp, 0, sizeof(resp));
+	if (spi_AT_send_recv(
+			"AT+HTTPCGET=\"http://worldtimeapi.org/api/ip\"\r\n",
+			resp, sizeof(resp) - 1, 10) != SUCCESS)
+		return tz;
+
+	char *p = strstr(resp, "\"utc_offset\"");
+	if (!p) return tz;
+
+	p = strchr(p, ':');
+	if (!p) return tz;
+
+	p = strchr(p, '"');
+	if (!p) return tz;
+
+	p++;
+	int sign = 1;
+	if (*p == '-') { sign = -1; p++; }
+	else if (*p == '+') { p++; }
+
+	if (p[0] < '0' || p[0] > '9' || p[1] < '0' || p[1] > '9')
+		return tz;
+
+	int hours = (p[0] - '0') * 10 + (p[1] - '0');
+	tz = (int8_t)(sign * hours);
+
+	if (tz < -12 || tz > 14)
+		tz = 127;
+
+	return tz;
+}
+
+/*============================================================================*/
+/**
   * @brief Sync system RTC with WiFi NTP
   * @retval 1 on success, 0 on failure
   */
@@ -1896,7 +1969,10 @@ uint8_t wifi_sync_rtc(void)
 
 	if ( !wifi_ensure_esp32_ready() ) return 0;
 
-	/* Configure SNTP: enable, timezone 0 (UTC), server — offset applied locally */
+	int8_t auto_tz = wifi_auto_tz();
+	if (auto_tz >= -12 && auto_tz <= 14)
+		m1_tz_offset_hours = auto_tz;
+
 	spi_AT_send_recv("AT+CIPSNTPCFG=1,0,\"pool.ntp.org\"\r\n", resp, sizeof(resp), 2);
 
 	/* Wait for sync (up to 5 seconds) */

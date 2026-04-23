@@ -40,4 +40,6 @@ int m1_field_detect_nfc_raw(void);
  * Bit 7 = oscillator ON, bits 1:0 = EFD mode (02=manual PDT). */
 int m1_field_detect_nfc_opctl(void);
 
+void field_detect_run(void);
+
 #endif /* M1_FIELD_DETECT_H_ */

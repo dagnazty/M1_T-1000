@@ -25,6 +25,7 @@
 #include "m1_display.h"
 #include "m1_sdcard.h"
 #include "m1_wifi.h"
+#include "m1_system.h"
 
 /*************************** D E F I N E S ************************************/
 
@@ -524,7 +525,8 @@ static void m1_gui_draw_menu_header(const char *title, uint8_t sel_item, uint8_t
 	char header_status[12];
 	S_M1_Power_Status_t power_status;
 	char battery_status[8];
-	const char *wifi_status;
+	m1_time_t now;
+	char time_str[9];
 
 	u8g2_DrawBox(&m1_u8g2, 0, 0, M1_LCD_DISPLAY_WIDTH, MENU_HEADER_HEIGHT - 1);
 	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_BG);
@@ -534,11 +536,37 @@ static void m1_gui_draw_menu_header(const char *title, uint8_t sel_item, uint8_t
 	{
 		battery_power_status_get(&power_status);
 		snprintf(battery_status, sizeof(battery_status), "%u%%", power_status.battery_level);
-		wifi_status = wifi_is_connected() ? "WF" : "--";
 
-		m1_draw_text(&m1_u8g2, 3, 8, 52, title, TEXT_ALIGN_LEFT);
-		m1_draw_text(&m1_u8g2, 56, 8, 22, battery_status, TEXT_ALIGN_RIGHT);
-		m1_draw_text(&m1_u8g2, 80, 8, 20, wifi_status, TEXT_ALIGN_CENTER);
+		m1_get_localtime(&now);
+		snprintf(time_str, sizeof(time_str), "%02u:%02u", now.hour, now.minute);
+
+		m1_draw_text(&m1_u8g2, 3, 8, 20, title, TEXT_ALIGN_LEFT);
+		m1_draw_text(&m1_u8g2, 40, 8, 30, time_str, TEXT_ALIGN_RIGHT);
+		m1_draw_text(&m1_u8g2, 72, 8, 24, battery_status, TEXT_ALIGN_RIGHT);
+
+		int rssi = wifi_get_rssi();
+		if (rssi != 0)
+		{
+			uint8_t bars;
+			if (rssi > -50) bars = 4;
+			else if (rssi > -60) bars = 3;
+			else if (rssi > -70) bars = 2;
+			else bars = 1;
+			for (uint8_t b = 0; b < 4; b++)
+			{
+				uint8_t h = 2 + b * 2;
+				uint8_t bx = 97 + b * 3;
+				uint8_t by = 9 - h;
+				if (b < bars)
+					u8g2_DrawBox(&m1_u8g2, bx, by, 2, h);
+				else
+					u8g2_DrawFrame(&m1_u8g2, bx, by, 2, h);
+			}
+		}
+		else
+		{
+			m1_draw_text(&m1_u8g2, 96, 8, 18, "--", TEXT_ALIGN_CENTER);
+		}
 		if (m1_sdcard_get_status() == SD_access_OK)
 			u8g2_DrawXBMP(&m1_u8g2, 114, 1, 10, 10, sd_card_10x10);
 		else
@@ -546,9 +574,9 @@ static void m1_gui_draw_menu_header(const char *title, uint8_t sel_item, uint8_t
 	}
 	else
 	{
-		m1_draw_text(&m1_u8g2, 3, 8, 86, title, TEXT_ALIGN_LEFT);
+		m1_draw_text(&m1_u8g2, 3, 8, 84, title, TEXT_ALIGN_LEFT);
 		snprintf(header_status, sizeof(header_status), "%u/%u", (unsigned)(sel_item + 1), (unsigned)num_items);
-		m1_draw_text(&m1_u8g2, 88, 8, 36, header_status, TEXT_ALIGN_RIGHT);
+		m1_draw_text(&m1_u8g2, 88, 8, 26, header_status, TEXT_ALIGN_RIGHT);
 
 		if (m1_sdcard_get_status() == SD_access_OK)
 		{

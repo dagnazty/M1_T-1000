@@ -41,6 +41,7 @@
 
 #include "m1_branding.h"
 #include "m1_main_menu.h"
+#include "m1_field_detect.h"
 
 /*************************** D E F I N E S ************************************/
 
@@ -275,15 +276,15 @@ S_M1_Menu_t menu_GPIO_5V_On_GPIO =
     "5V power", gpio_5v_on_gpio, NULL, NULL, 0, 0, NULL, NULL, NULL
 };
 
-S_M1_Menu_t menu_GPIO_USB_UART =
+S_M1_Menu_t menu_GPIO_Field_Detect =
 {
-    "USB-UART bridge", gpio_usb_uart_bridge, NULL, NULL, 0, 0, NULL, NULL, NULL
+    "Field Detect", field_detect_run, NULL, NULL, 0, 0, NULL, NULL, NULL
 };
 
 S_M1_Menu_t menu_GPIO =
 {
     "GPIO", menu_gpio_init, menu_gpio_exit, gpio_xkey_handler, 4, 0, menu_m1_icon_gpio, gpio_gui_update,
-    {&menu_GPIO_GPIO_Manual_Control, &menu_GPIO_3_3V_On_GPIO, &menu_GPIO_5V_On_GPIO, &menu_GPIO_USB_UART}
+    {&menu_GPIO_GPIO_Manual_Control, &menu_GPIO_3_3V_On_GPIO, &menu_GPIO_5V_On_GPIO, &menu_GPIO_Field_Detect}
 };
 
 /*------------------------------- > Settings ---------------------------------*/
@@ -780,9 +781,13 @@ void menu_main_handler_task(void *param)
 	while(1)
 	{
 		menu_update_stat = MENU_UPDATE_NONE;
-		ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+		ret = xQueueReceive(main_q_hdl, &q_item, pdMS_TO_TICKS(30000));
 		if ( ret!=pdTRUE )
+		{
+			if (m1_device_stat.op_mode == M1_OPERATION_MODE_MENU_ON)
+				m1_gui_menu_update(pthis_submenu, menu_ctl.menu_item_active, MENU_UPDATE_REFRESH);
 			continue;
+		}
 		if ( q_item.q_evt_type!=Q_EVENT_KEYPAD )
 			continue;
 		ret = xQueueReceive(button_events_q_hdl, &this_button_status, 0);

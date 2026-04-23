@@ -491,13 +491,11 @@ static int power_reboot_kp_handler(void)
 	} // if ( m1_buttons_status[BUTTON_BACK_KP_ID]==BUTTON_EVENT_CLICK )
 	else if ( this_button_status.event[BUTTON_RIGHT_KP_ID]==BUTTON_EVENT_CLICK ) // Reboot?
 	{
-		//Set boot mode in backup registers, if any
 		startup_config_write(BK_REGS_SELECT_DEV_OP_STAT, DEV_OP_STATUS_REBOOT);
-		//Set registers in RTC, if any
-		//Close SD card, if any; // Do other things for this task, if needed
-		vTaskDelay(pdMS_TO_TICKS(DELAY_BEFORE_POWER_REBOOT)); // Without this delay, the reboot won't work properly!
-		m1_pre_power_down();
-		//vTaskEndScheduler();
+		vTaskDelay(pdMS_TO_TICKS(DELAY_BEFORE_POWER_REBOOT));
+		m1_backlight_on(0);
+		u8g2_SetPowerSave(&m1_u8g2, true);
+		m1_system_GPIO_init();
 		NVIC_SystemReset();
 	} // else if ( this_button_status.event[BUTTON_RIGHT_KP_ID]==BUTTON_EVENT_CLICK )
 

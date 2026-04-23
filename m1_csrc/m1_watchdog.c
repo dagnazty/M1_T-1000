@@ -37,6 +37,8 @@ static TaskHandle_t m1_wdt_task_hdl;
 
 static uint16_t m1_wdt_check_count = 0;
 
+static volatile bool m1_wdt_paused = false;
+
 /********************* F U N C T I O N   P R O T O T Y P E S ******************/
 
 void m1_wdt_init(void);
@@ -116,6 +118,12 @@ static void m1_wdt_handler_task(void *param)
 	M1_LOG_I(M1_LOGDB_TAG, "WDT task started\r\n");
 	while (1)
 	{
+		if (m1_wdt_paused)
+		{
+			__HAL_IWDG_RELOAD_COUNTER(&hiwdg);
+			vTaskDelay(pdMS_TO_TICKS(M1_WDT_TIMEOUT / 2));
+			continue;
+		}
 		m1_wdt_checkin();
 		vTaskDelay(pdMS_TO_TICKS(M1_WDT_TIMEOUT/2));
 		run_time += M1_WDT_TIMEOUT/2;
@@ -415,4 +423,14 @@ void m1_wdt_resume_task(S_M1_WDT_Report_ID rpt_id)
 		wdt_report[rpt_id].run_time = 0;
 		taskEXIT_CRITICAL();
 	}
+}
+
+void m1_wdt_pause(void)
+{
+	m1_wdt_paused = true;
+}
+
+void m1_wdt_unpause(void)
+{
+	m1_wdt_paused = false;
 }
