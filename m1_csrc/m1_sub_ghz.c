@@ -43,6 +43,11 @@
 #define NOISE_FLOOR_RSSI_THRESHOLD		-110 //dBm
 #define SIGNAL_TO_NOISE_RATIO			20 //dB
 
+// Pure geometry helpers for the live RSSI level bar (host-tested in
+// tools/host_test/test_subghz_rssi.c). Header-free snippet, single source of
+// truth shared with the host test — no new translation unit / CMake change.
+#include "m1_sub_ghz_rssi_bar.inc"
+
 #define CHANNEL_STEPS_MAX				256
 #define CHANNEL_STEP					(float)0.25 // MHz
 
