@@ -48,6 +48,11 @@
 // truth shared with the host test — no new translation unit / CMake change.
 #include "m1_sub_ghz_rssi_bar.inc"
 
+// Live RSSI bar refresh cadence (ms). The record message loop wakes on this
+// timeout to sample CURR_RSSI during silence; the raw-sample flush/decode path
+// is never delayed. ~10 Hz vs a ~100us radio read.
+#define SUBGHZ_RSSI_BAR_REFRESH_MS		100
+
 #define CHANNEL_STEPS_MAX				256
 #define CHANNEL_STEP					(float)0.25 // MHz
 
@@ -1102,6 +1107,23 @@ static void subghz_record_gui_update(uint8_t param)
 
 /*============================================================================*/
 /**
+  * @brief  Sample the current RSSI once (dBm) on the SubGHz task.
+  * @retval RF input level in dBm (RSSI_value/2 - MODEM_RSSI_COMP - 70).
+  * @note   ~100us SPI read; call only from the SubGHz task, never from an ISR.
+  */
+/*============================================================================*/
+static int16_t subghz_sample_rssi_dbm(void)
+{
+	struct si446x_reply_GET_MODEM_STATUS_map *pmodemstat;
+
+	SI446x_Get_IntStatus(0, 0, 0);           // read/clear pending INTs
+	pmodemstat = SI446x_Get_ModemStatus(0x00);
+	return (int16_t)(pmodemstat->CURR_RSSI / 2 - MODEM_RSSI_COMP - 70);
+} /* static int16_t subghz_sample_rssi_dbm(void) */
+
+
+/*============================================================================*/
+/**
   * @brief
   * @param
   * @retval
@@ -1114,7 +1136,24 @@ static int subghz_record_gui_message(void)
 	uint8_t ret_val = 1;
 	uint32_t rcv_samples;
 
-	ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+	/* Finite timeout so the loop wakes periodically to refresh the live RSSI
+	 * bar during silence. A queue event still preempts the wait immediately, so
+	 * the raw-sample flush/decode path below is unaffected. */
+	ret = xQueueReceive(main_q_hdl, &q_item, pdMS_TO_TICKS(SUBGHZ_RSSI_BAR_REFRESH_MS));
+	if (ret!=pdTRUE)
+	{
+		/* Timed wake with no queue event: while recording and still waiting for
+		 * a decode, sample live RSSI and redraw the bar. Once a protocol is
+		 * decoded the readout stays frozen at the decoded RSSI (unchanged
+		 * decoded-info display). Sampling/drawing happens on this task only. */
+		if ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE
+		     && !subghz_record_has_decoded )
+		{
+			subghz_record_last_rssi_dbm = subghz_sample_rssi_dbm();
+			m1_uiView_display_update(SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE);
+		}
+		return ret_val;
+	}
 	if (ret==pdTRUE)
 	{
 		if ( q_item.q_evt_type==Q_EVENT_KEYPAD )
