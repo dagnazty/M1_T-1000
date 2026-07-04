@@ -111,6 +111,27 @@ static void test_documented_columns(void)
 	CHECK(subghz_rssi_threshold_px(120) < 120, "threshold mark below ceiling");
 }
 
+/* The concrete on-screen bar width maps to fixed, documented pixel columns.
+ * This pins the geometry the ACTIVE-screen widget renders (Task 2) so the
+ * device draw code and this test share one source of truth for the fill width. */
+static void test_onscreen_bar_geometry(void)
+{
+	printf("test_onscreen_bar_geometry\n");
+	CHECK_EQ_INT(subghz_rssi_to_bar(SUBGHZ_RSSI_BAR_MIN_DBM, SUBGHZ_RSSI_BAR_FILL_W),
+	             0, "floor -> empty on-screen bar");
+	CHECK_EQ_INT(subghz_rssi_to_bar(SUBGHZ_RSSI_BAR_MAX_DBM, SUBGHZ_RSSI_BAR_FILL_W),
+	             SUBGHZ_RSSI_BAR_FILL_W, "ceiling -> full on-screen bar");
+	/* Midpoint -70 dBm -> half of the 114px inner bar. */
+	CHECK_EQ_INT(subghz_rssi_to_bar(-70, SUBGHZ_RSSI_BAR_FILL_W), 57,
+	             "midpoint -> 57px on-screen");
+	/* Threshold mark (-90 dBm) sits a quarter of the way up the 114px bar. */
+	CHECK_EQ_INT(subghz_rssi_threshold_px(SUBGHZ_RSSI_BAR_FILL_W), 28,
+	             "threshold mark -> 28px on-screen");
+	CHECK(subghz_rssi_threshold_px(SUBGHZ_RSSI_BAR_FILL_W) > 0 &&
+	      subghz_rssi_threshold_px(SUBGHZ_RSSI_BAR_FILL_W) < SUBGHZ_RSSI_BAR_FILL_W,
+	      "on-screen threshold mark strictly inside the bar");
+}
+
 int main(void)
 {
 	printf("== test_subghz_rssi ==\n");
@@ -118,6 +139,7 @@ int main(void)
 	test_clamp_extremes();
 	test_monotonic();
 	test_documented_columns();
+	test_onscreen_bar_geometry();
 
 	printf("\n%d checks, %d failures\n", g_checks, g_failures);
 	if (g_failures) {

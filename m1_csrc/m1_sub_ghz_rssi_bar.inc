@@ -26,6 +26,10 @@
 #define SUBGHZ_RSSI_BAR_MAX_DBM         (-30) /* full bar (dBm) */
 #define SUBGHZ_RSSI_BAR_THRESHOLD_DBM   (-90) /* detection mark: floor + 20 dB SNR */
 
+/* Inner fill width (px) of the on-screen ACTIVE-record bar. Shared with the
+ * host test so the rendered pixel columns are pinned in one place. */
+#define SUBGHZ_RSSI_BAR_FILL_W           114
+
 /*
  * Map an RSSI reading (dBm) to a fill width in [0, bar_w] pixels.
  * Saturating at both ends, monotonic in between, and overflow-safe for any

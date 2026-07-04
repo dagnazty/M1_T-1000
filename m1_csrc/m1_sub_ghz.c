@@ -336,6 +336,10 @@ static uint32_t subghz_custom_freq_hz = 433920000UL;
 static SubGHz_Dec_Info_t subghz_record_last_decoded;
 static bool subghz_record_has_decoded = false;
 
+/* Last RSSI (dBm) shown by the live level bar on the record view. Fed from the
+ * decoded RSSI here (Task 2); a timed sampler updates it during silence later. */
+static int16_t subghz_record_last_rssi_dbm = SUBGHZ_RSSI_BAR_MIN_DBM;
+
 //************************** S T R U C T U R E S *******************************
 
 typedef enum {
@@ -924,6 +928,36 @@ static void subghz_record_gui_destroy(uint8_t param)
 
 /*============================================================================*/
 /**
+  * @brief  Draw the live RSSI level bar with a static noise-floor threshold mark.
+  * @param  u8g2  Display handle (draw only on the SubGHz task, never from ISR).
+  * @param  x,y   Top-left of the bar frame.
+  * @param  w,h   Outer bar size in pixels (inner fill area is w-2 by h-2).
+  * @param  dbm   Current RSSI in dBm; mapped to fill via subghz_rssi_to_bar().
+  * @retval None
+  */
+/*============================================================================*/
+static void subghz_draw_rssi_bar(u8g2_t *u8g2, uint8_t x, uint8_t y,
+                                 uint8_t w, uint8_t h, int16_t dbm)
+{
+	uint8_t inner_w = (w > 2) ? (uint8_t)(w - 2) : 0;
+	uint8_t inner_h = (h > 2) ? (uint8_t)(h - 2) : 0;
+	uint8_t fill    = subghz_rssi_to_bar(dbm, inner_w);
+	uint8_t mark    = subghz_rssi_threshold_px(inner_w);
+
+	u8g2_SetDrawColor(u8g2, M1_DISP_DRAW_COLOR_TXT);
+	u8g2_DrawFrame(u8g2, x, y, w, h);
+	if (fill > 0 && inner_h > 0)
+		u8g2_DrawBox(u8g2, x + 1, y + 1, fill, inner_h);
+
+	/* Static threshold mark: short ticks above and below the bar at the
+	 * detection-threshold column, so it stays visible over the fill. */
+	u8g2_DrawVLine(u8g2, x + 1 + mark, (y >= 2) ? (y - 2) : 0, 2);
+	u8g2_DrawVLine(u8g2, x + 1 + mark, y + h, 2);
+} /* static void subghz_draw_rssi_bar(...) */
+
+
+/*============================================================================*/
+/**
   * @brief
   * @param
   * @retval
@@ -952,22 +986,21 @@ static void subghz_record_gui_update(uint8_t param)
 
 		case SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE:
 		{
-			/* Show decoded protocol info if available */
+			/* Show decoded protocol info if available. The RSSI bar occupies the
+			 * third row, so key/bits and TE share line2 and the live dBm is shown
+			 * on the bar readout (protocol/key/bits/dBm/TE all stay visible). */
 			if (subghz_record_has_decoded)
 			{
 				strncpy(line1, protocol_text[subghz_record_last_decoded.protocol], sizeof(line1) - 1);
-				snprintf(line2, sizeof(line2), "0x%lX %dbit",
+				snprintf(line2, sizeof(line2), "0x%lX %dbit TE:%d",
 				         (uint32_t)subghz_record_last_decoded.key,
-				         subghz_record_last_decoded.bit_len);
-				snprintf(line3, sizeof(line3), "%ddBm TE:%d",
-				         subghz_record_last_decoded.rssi,
+				         subghz_record_last_decoded.bit_len,
 				         subghz_record_last_decoded.te);
 			}
 			else
 			{
 				strcpy(line1, "Recording...");
 				strcpy(line2, "Waiting for signal");
-				strcpy(line3, "BACK or OK stops");
 			}
 			break;
 		}
@@ -1012,11 +1045,35 @@ static void subghz_record_gui_update(uint8_t param)
 	} // switch (param)
 
 	m1_u8g2_firstpage();
-	m1_draw_status_panel(&m1_u8g2, "Sub-GHz", "Record",
-					  subghz_antenna_50x27, 50, 27,
-					  line1[0] ? line1 : NULL,
-					  line2[0] ? line2 : NULL,
-					  line3[0] ? line3 : NULL);
+	if (param == SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE)
+	{
+		/* ACTIVE drops the antenna icon to make room for a full-width live
+		 * RSSI bar across the bottom of the content frame, with a numeric dBm
+		 * readout right-aligned on the top text row. */
+		char dbm_txt[12];
+
+		m1_draw_status_panel(&m1_u8g2, "Sub-GHz", "Record",
+						  NULL, 0, 0,
+						  line1[0] ? line1 : NULL,
+						  line2[0] ? line2 : NULL,
+						  NULL);
+
+		snprintf(dbm_txt, sizeof(dbm_txt), "%ddBm", subghz_record_last_rssi_dbm);
+		u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+		m1_draw_text(&m1_u8g2, 62, 25, 60, dbm_txt, TEXT_ALIGN_RIGHT);
+
+		/* Bar frame: x=6, y=39, full inner width (SUBGHZ_RSSI_BAR_FILL_W+2). */
+		subghz_draw_rssi_bar(&m1_u8g2, 6, 39, SUBGHZ_RSSI_BAR_FILL_W + 2, 8,
+		                     subghz_record_last_rssi_dbm);
+	}
+	else
+	{
+		m1_draw_status_panel(&m1_u8g2, "Sub-GHz", "Record",
+						  subghz_antenna_50x27, 50, 27,
+						  line1[0] ? line1 : NULL,
+						  line2[0] ? line2 : NULL,
+						  line3[0] ? line3 : NULL);
+	}
 	if (param == SUBGHZ_RECORD_DISPLAY_PARAM_READY)
 	{
 		m1_draw_bottom_bar(&m1_u8g2, arrowdown_8x8, "Config", "Record", target_10x10);
@@ -1087,6 +1144,7 @@ static int subghz_record_gui_message(void)
 				if (subghz_decenc_read(&dec, false) && dec.key != 0)
 				{
 					subghz_record_last_decoded = dec;
+					subghz_record_last_rssi_dbm = dec.rssi; /* feed the live bar */
 					subghz_record_has_decoded = true;
 					m1_buzzer_notification();
 					/* Only refresh display when protocol is actually decoded */
@@ -1191,6 +1249,7 @@ static int subghz_record_kp_handler(void)
 				{
 					last_data_saved = false;
 					subghz_record_has_decoded = false;
+					subghz_record_last_rssi_dbm = SUBGHZ_RSSI_BAR_MIN_DBM; /* bar starts empty */
 					subghz_record_total_samples = 0;
 					m1_sdm_task_init();
 					m1_sdm_task_start();
