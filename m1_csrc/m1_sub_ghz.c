@@ -345,6 +345,10 @@ static bool subghz_record_has_decoded = false;
  * decoded RSSI here (Task 2); a timed sampler updates it during silence later. */
 static int16_t subghz_record_last_rssi_dbm = SUBGHZ_RSSI_BAR_MIN_DBM;
 
+/* True while the READY pre-scan holds the radio in RX (listening, no SD writer)
+ * so the live bar tracks RF before a recording is armed (Task 4). */
+static bool subghz_prescan_rx_active = false;
+
 //************************** S T R U C T U R E S *******************************
 
 typedef enum {
@@ -491,6 +495,10 @@ static uint8_t sub_ghz_parse_raw_data(uint8_t buffer_ptr_id);
 static uint8_t sub_ghz_file_load(void);
 
 static bool sub_ghz_custom_freq_entry(void);
+
+static int16_t subghz_sample_rssi_dbm(void);
+static void subghz_prescan_rx_apply(void);
+static void subghz_prescan_rx_stop(void);
 
 /* Flipper-matching feature functions */
 void sub_ghz_read(void);
@@ -984,8 +992,8 @@ static void subghz_record_gui_update(uint8_t param)
 			         subghz_freq_presets[subghz_cfg.freq_idx].label,
 			         subghz_mod_presets[subghz_cfg.mod_idx].label);
 			strcpy(line1, cfg_line);
-			strcpy(line2, "OK record  DOWN config");
-			strcpy(line3, "LEFT/RIGHT band  UP custom");
+			strcpy(line2, "OK rec  DOWN cfg  UP custom");
+			/* line3 left empty: the live pre-scan RSSI bar occupies that row */
 			break;
 		}
 
@@ -1049,12 +1057,23 @@ static void subghz_record_gui_update(uint8_t param)
 			break;
 	} // switch (param)
 
-	m1_u8g2_firstpage();
-	if (param == SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE)
+	/* One-shot on entering READY from another state: start the pre-scan RX so
+	 * the live bar tracks RF. Re-entries from the 10 Hz sampler keep the same
+	 * param and skip this (RX assert is heavy; never run it on the redraw path). */
+	if (param == SUBGHZ_RECORD_DISPLAY_PARAM_READY
+	    && subghz_uiview_gui_latest_param != SUBGHZ_RECORD_DISPLAY_PARAM_READY)
 	{
-		/* ACTIVE drops the antenna icon to make room for a full-width live
-		 * RSSI bar across the bottom of the content frame, with a numeric dBm
-		 * readout right-aligned on the top text row. */
+		subghz_apply_config(); /* band/mod from the displayed presets */
+		subghz_prescan_rx_apply();
+	}
+
+	m1_u8g2_firstpage();
+	if (param == SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE
+	    || param == SUBGHZ_RECORD_DISPLAY_PARAM_READY)
+	{
+		/* READY (pre-scan) and ACTIVE (recording) drop the antenna icon to make
+		 * room for a full-width live RSSI bar across the bottom of the content
+		 * frame, with a numeric dBm readout right-aligned on the top text row. */
 		char dbm_txt[12];
 
 		m1_draw_status_panel(&m1_u8g2, "Sub-GHz", "Record",
@@ -1124,6 +1143,40 @@ static int16_t subghz_sample_rssi_dbm(void)
 
 /*============================================================================*/
 /**
+  * @brief  Put the radio in RX for the READY pre-scan (listening only, no SD
+  *         writer / no raw-capture ISR) so the live bar tracks the selected
+  *         frequency. Callers set the band via subghz_apply_config() (presets)
+  *         or subghz_scan_config directly (custom) first. Idempotent and cheap
+  *         enough for user keypresses — never call it on the 10 Hz redraw path.
+  * @retval None
+  */
+/*============================================================================*/
+static void subghz_prescan_rx_apply(void)
+{
+	sub_ghz_set_opmode(SUB_GHZ_OPMODE_RX, subghz_scan_config.band, 0, 0);
+	subghz_record_last_rssi_dbm = SUBGHZ_RSSI_BAR_MIN_DBM; /* start at the floor */
+	subghz_prescan_rx_active = true;
+} /* static void subghz_prescan_rx_apply(void) */
+
+
+/*============================================================================*/
+/**
+  * @brief  Tear the READY pre-scan RX down and isolate the radio.
+  * @retval None
+  */
+/*============================================================================*/
+static void subghz_prescan_rx_stop(void)
+{
+	if (subghz_prescan_rx_active)
+	{
+		sub_ghz_set_opmode(SUB_GHZ_OPMODE_ISOLATED, subghz_scan_config.band, 0, 0);
+		subghz_prescan_rx_active = false;
+	}
+} /* static void subghz_prescan_rx_stop(void) */
+
+
+/*============================================================================*/
+/**
   * @brief
   * @param
   * @retval
@@ -1142,15 +1195,19 @@ static int subghz_record_gui_message(void)
 	ret = xQueueReceive(main_q_hdl, &q_item, pdMS_TO_TICKS(SUBGHZ_RSSI_BAR_REFRESH_MS));
 	if (ret!=pdTRUE)
 	{
-		/* Timed wake with no queue event: while recording and still waiting for
-		 * a decode, sample live RSSI and redraw the bar. Once a protocol is
-		 * decoded the readout stays frozen at the decoded RSSI (unchanged
-		 * decoded-info display). Sampling/drawing happens on this task only. */
-		if ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE
-		     && !subghz_record_has_decoded )
+		/* Timed wake with no queue event: sample live RSSI and redraw the bar.
+		 *  - READY pre-scan: radio is listening in RX (no SD writer).
+		 *  - ACTIVE recording, pre-decode: track RF during silence. Once a
+		 *    protocol is decoded the readout stays frozen at the decoded RSSI
+		 *    (unchanged decoded-info display).
+		 * Sampling/drawing happens on this task only, never from an ISR. */
+		if ( ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_READY
+		       && subghz_prescan_rx_active )
+		  || ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE
+		       && !subghz_record_has_decoded ) )
 		{
 			subghz_record_last_rssi_dbm = subghz_sample_rssi_dbm();
-			m1_uiView_display_update(SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE);
+			m1_uiView_display_update(subghz_uiview_gui_latest_param);
 		}
 		return ret_val;
 	}
@@ -1262,6 +1319,7 @@ static int subghz_record_kp_handler(void)
 			} // else if ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_PLAY )
 			else
 			{
+				subghz_prescan_rx_stop(); /* isolate the pre-scan RX before leaving */
 				m1_uiView_display_switch(VIEW_MODE_IDLE, 0);
 				; // Do extra tasks here if needed
 				sub_ghz_rx_deinit();
@@ -1289,6 +1347,7 @@ static int subghz_record_kp_handler(void)
 					last_data_saved = false;
 					subghz_record_has_decoded = false;
 					subghz_record_last_rssi_dbm = SUBGHZ_RSSI_BAR_MIN_DBM; /* bar starts empty */
+					subghz_prescan_rx_active = false; /* recording now owns the radio (handoff) */
 					subghz_record_total_samples = 0;
 					m1_sdm_task_init();
 					m1_sdm_task_start();
@@ -1374,6 +1433,7 @@ static int subghz_record_kp_handler(void)
 				subghz_cfg.freq_idx = (subghz_cfg.freq_idx > 0) ?
 				    subghz_cfg.freq_idx - 1 : SUBGHZ_FREQ_PRESET_COUNT - 1;
 				subghz_apply_config();
+				subghz_prescan_rx_apply(); /* re-tune pre-scan RX to the new band */
 				m1_uiView_display_update(SUBGHZ_RECORD_DISPLAY_PARAM_READY);
 			} // if ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_READY )
 			else if ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_COMPLETE )
@@ -1388,6 +1448,7 @@ static int subghz_record_kp_handler(void)
 			{
 				subghz_cfg.freq_idx = (subghz_cfg.freq_idx + 1) % SUBGHZ_FREQ_PRESET_COUNT;
 				subghz_apply_config();
+				subghz_prescan_rx_apply(); /* re-tune pre-scan RX to the new band */
 				m1_uiView_display_update(SUBGHZ_RECORD_DISPLAY_PARAM_READY);
 			} // if ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_READY )
 		} // else if(this_button_status.event[BUTTON_RIGHT_KP_ID]==BUTTON_EVENT_CLICK )
@@ -1400,6 +1461,7 @@ static int subghz_record_kp_handler(void)
 					subghz_scan_config.band = SUB_GHZ_BAND_CUSTOM;
 					subghz_scan_config.modulation = (subghz_custom_freq_hz >= 850000000UL) ? MODULATION_FSK : MODULATION_OOK;
 				}
+				subghz_prescan_rx_apply(); /* re-tune pre-scan RX (keep custom band) */
 				m1_uiView_display_update(SUBGHZ_RECORD_DISPLAY_PARAM_READY);
 			}
 		} // else if(this_button_status.event[BUTTON_UP_KP_ID]==BUTTON_EVENT_CLICK )
@@ -1409,6 +1471,7 @@ static int subghz_record_kp_handler(void)
 			{
 				sub_ghz_config_screen();
 				subghz_apply_config();
+				subghz_prescan_rx_apply(); /* config screen may have moved the radio; re-assert RX */
 				m1_uiView_display_update(SUBGHZ_RECORD_DISPLAY_PARAM_READY);
 			}
 			else if ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_COMPLETE )
