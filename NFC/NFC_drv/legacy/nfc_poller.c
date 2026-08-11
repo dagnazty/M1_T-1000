@@ -1025,6 +1025,9 @@ static void m1_t2t_read_ntag(const rfalNfcDevice *dev)
         nfc_pwd_source_t pwd_src = NFC_PWD_SRC_NONE;
         bool auth_attempted = false;
 
+        /* Result belongs to this read only — the UI polls it after every cycle */
+        nfc_ctx_clear_auth_result();
+
         /* Try manual or captured password first */
         if (nfc_ctx_get_best_pwd(pwd, &pwd_src)) {
             const char *src_str = (pwd_src == NFC_PWD_SRC_MANUAL) ? "manual" : "captured";
@@ -1036,6 +1039,7 @@ static void m1_t2t_read_ntag(const rfalNfcDevice *dev)
             } else {
                 platformLog("[T2T] PWD_AUTH failed (%s, err=%d)\r\n", src_str, auth_err);
             }
+            nfc_ctx_set_auth_result(auth_err == RFAL_ERR_NONE, pwd, pack_rx);
             auth_attempted = true;
             /* Clear manual password after use (one-shot) */
             if (pwd_src == NFC_PWD_SRC_MANUAL)
@@ -1055,6 +1059,7 @@ static void m1_t2t_read_ntag(const rfalNfcDevice *dev)
                     } else {
                         platformLog("[T2T] PWD_AUTH failed (err=%d) — non-Amiibo or locked tag\r\n", auth_err);
                     }
+                    nfc_ctx_set_auth_result(auth_err == RFAL_ERR_NONE, pwd, pack_rx);
                 }
             }
         }
@@ -1155,6 +1160,43 @@ static void m1_t2t_read_ntag(const rfalNfcDevice *dev)
 
     // Mark all pages as valid in valid_bits for now
     memset(g_nfc_valid_bits, 0xFF, (num_pages + 7) / 8);
+
+    /* --- AUTHLIM: how many wrong passwords this tag tolerates ---
+     * The NTAG21x CONFIG pages sit at the end of memory: CFG0 at max_page-4,
+     * CFG1 at max_page-3, and AUTHLIM is the low 3 bits of CFG1 byte 0
+     * (the ACCESS byte). A non-zero value means the tag permanently locks
+     * password auth out after that many failures, so a dictionary run must
+     * not be attempted blindly. Read from the dump we already have — no
+     * extra commands, and unreadable CONFIG simply leaves it unknown. */
+    {
+        bool    authlim_known = false;
+        uint8_t authlim       = 0;
+
+        if (ver_ok && max_page >= 4U) {
+            uint16_t cfg1_page = (uint16_t)(max_page - 3U);
+            uint16_t cfg1_off  = (uint16_t)(cfg1_page * 4U);
+
+            if (cfg1_page < num_pages && (cfg1_off + 4U) <= dumpSize) {
+                uint8_t access = dump[cfg1_off];
+                /* An all-zero CONFIG page means the read was blocked or the
+                 * page was never fetched — treat that as unknown, not as
+                 * "unlimited attempts". */
+                if (access != 0x00U || dump[cfg1_off + 1U] != 0x00U ||
+                    dump[cfg1_off + 2U] != 0x00U || dump[cfg1_off + 3U] != 0x00U) {
+                    authlim       = (uint8_t)(access & 0x07U);
+                    authlim_known = true;
+                }
+            }
+        }
+
+        nfc_ctx_set_authlim(authlim_known, authlim);
+        if (authlim_known) {
+            platformLog("[T2T] AUTHLIM=%u %s\r\n", (unsigned)authlim,
+                        (authlim == 0U) ? "(unlimited)" : "(limited!)");
+        } else {
+            platformLog("[T2T] AUTHLIM unknown (CONFIG unreadable)\r\n");
+        }
+    }
 
     // Update context dump metadata
     nfc_ctx_set_dump(4,                // unit_size: 4 bytes per page
@@ -1597,6 +1639,12 @@ void nfc_poller_read_t2t(const rfalNfcDevice *dev)
 ReturnCode nfc_poller_pwd_auth(const uint8_t pwd[4], uint8_t pack[2])
 {
     return PwdAuth_Ntag(pwd, pack);
+}
+
+bool nfc_poller_amiibo_pwd(const uint8_t *uid, uint8_t uid_len,
+                           uint8_t pwd_out[4], uint8_t pack_out[2])
+{
+    return ntag_generate_amiibo_pwd(uid, uid_len, pwd_out, pack_out);
 }
 
 ReturnCode nfc_poller_get_version(uint8_t *rxBuf, uint16_t rxBufLen, uint16_t *rcvLen)

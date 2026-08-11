@@ -48,6 +48,10 @@ ReturnCode nfc_poller_pwd_auth(const uint8_t pwd[4], uint8_t pack[2]);
 /** Send GET_VERSION to NTAG; fills rxBuf with 8-byte version */
 ReturnCode nfc_poller_get_version(uint8_t *rxBuf, uint16_t rxBufLen, uint16_t *rcvLen);
 
+/** Derive the Amiibo (NTAG215) password and PACK from a 7-byte UID. */
+bool nfc_poller_amiibo_pwd(const uint8_t *uid, uint8_t uid_len,
+                           uint8_t pwd_out[4], uint8_t pack_out[2]);
+
 /**
  * @brief Test function: Enable continuous 13.56 MHz carrier (sine wave)
  * 

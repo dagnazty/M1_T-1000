@@ -71,14 +71,15 @@ const char *m1_nfc_more_options_file[] = {
 };
 
 /* Menu for NFC Tools (both top-level nfc_tools() and Utils view) */
-#define NFC_TOOL_OPTIONS_COUNT  6
+#define NFC_TOOL_OPTIONS_COUNT  7
 static const char *m1_nfc_tool_options[] = {
 	"Tag Info",
 	"Clone Emulate",
 	"NFC Fuzzer",
 	"Write UID",
 	"Wipe Tag",
-	"Write NDEF"
+	"Write NDEF",
+	"PWD Dict"
 };
 
 
@@ -140,6 +141,8 @@ void nfc_extra_actions(void);
 void nfc_add_manually(void);
 void nfc_tools(void);
 static void nfc_tool_unlock_read(void);
+static bool nfc_save_recovered_pwd(const uint8_t pwd[4], const uint8_t pack[2]);
+static void nfc_tool_pwd_dict(void);
 static void nfc_unlock_with_reader(void);
 static uint8_t nfc_read_more_options_save(void);
 static uint8_t nfc_read_more_options_delete(void);
@@ -1954,6 +1957,11 @@ static int nfc_utils_kp_handler(void)
 					m1_uiView_display_update(X_MENU_UPDATE_REFRESH);
 					break;
 
+				case 6: /* PWD Dict */
+					nfc_tool_pwd_dict();
+					m1_uiView_display_update(X_MENU_UPDATE_REFRESH);
+					break;
+
 				default:
 					break;
 			}
@@ -3141,6 +3149,19 @@ static void nfc_tool_unlock_read(void)
 				u8g2_DrawStr(&m1_u8g2, 2, 24, c->ui.title_text);
 				u8g2_DrawStr(&m1_u8g2, 2, 34, "UID:");
 				u8g2_DrawStr(&m1_u8g2, 30, 34, c->ui.uid_text);
+				{
+					/* Auth succeeded — keep the working password, which was
+					 * previously only ever written to the serial log */
+					uint8_t rpwd[4], rpack[2];
+					if (nfc_ctx_get_auth_result(rpwd, rpack))
+					{
+						char pk[28];
+						bool ok = nfc_save_recovered_pwd(rpwd, rpack);
+						snprintf(pk, sizeof(pk), "PACK %02X%02X %s",
+						         rpack[0], rpack[1], ok ? "saved" : "");
+						u8g2_DrawStr(&m1_u8g2, 2, 54, pk);
+					}
+				}
 				if (c->dump.has_dump) {
 					char pg_str[24];
 					snprintf(pg_str, sizeof(pg_str), "Pages: %u",
@@ -3351,6 +3372,370 @@ static void nfc_unlock_with_reader(void)
 
 /*============================================================================*/
 /**
+ * @brief  Write a recovered NTAG password to 0:/NFC/<UID>_pwd.txt
+ * @retval true on success
+ */
+/*============================================================================*/
+static bool nfc_save_recovered_pwd(const uint8_t pwd[4], const uint8_t pack[2])
+{
+	nfc_run_ctx_t *c = nfc_ctx_get();
+	FIL f;
+	char path[40];
+	char uidc[24];
+	char line[80];
+	uint8_t i;
+
+	if (c == NULL || c->head.uid_len == 0 || pwd == NULL)
+		return false;
+
+	uidc[0] = '\0';
+	for (i = 0; i < c->head.uid_len && i < 10U; i++)
+	{
+		char t[3];
+		snprintf(t, sizeof(t), "%02X", c->head.uid[i]);
+		strcat(uidc, t);
+	}
+
+	snprintf(path, sizeof(path), "0:/NFC/%s_pwd.txt", uidc);
+	if (m1_fb_open_new_file(&f, path) != 0)
+		return false;
+
+	snprintf(line, sizeof(line), "# NTAG/Ultralight password\r\n# UID: %s\r\n", uidc);
+	m1_fb_write_to_file(&f, line, strlen(line));
+
+	snprintf(line, sizeof(line), "PWD: %02X%02X%02X%02X\r\n",
+	         pwd[0], pwd[1], pwd[2], pwd[3]);
+	m1_fb_write_to_file(&f, line, strlen(line));
+
+	if (pack != NULL)
+	{
+		snprintf(line, sizeof(line), "PACK: %02X%02X\r\n", pack[0], pack[1]);
+		m1_fb_write_to_file(&f, line, strlen(line));
+	}
+
+	m1_fb_close_file(&f);
+	return true;
+}
+
+
+/*============================================================================*/
+/* NTAG password dictionary                                                   */
+/*============================================================================*/
+
+#define NFC_PWD_DICT_MAX      32U
+#define NFC_PWD_DICT_FILE     "0:/NFC/assets/ntag_pwd_dict.txt"
+
+/* Well-known factory / transport passwords. FFFFFFFF is the NXP default. */
+static const uint8_t nfc_pwd_dict_builtin[][4] = {
+	{0xFF, 0xFF, 0xFF, 0xFF},
+	{0x00, 0x00, 0x00, 0x00},
+	{0x12, 0x34, 0x56, 0x78},
+	{0x11, 0x11, 0x11, 0x11},
+	{0xAA, 0xAA, 0xAA, 0xAA},
+	{0x13, 0x88, 0x13, 0x88},
+};
+
+/*============================================================================*/
+/**
+ * @brief  Build the password list: UID-derived Amiibo password first, then any
+ *         user dictionary from SD, then the built-in defaults.
+ * @retval Number of passwords loaded into dict
+ */
+/*============================================================================*/
+static uint8_t nfc_pwd_dict_build(uint8_t dict[][4])
+{
+	nfc_run_ctx_t *c = nfc_ctx_get();
+	uint8_t count = 0;
+	uint8_t i, j;
+
+	/* Amiibo derivation is UID-specific, so it is the best first guess */
+	if (c != NULL && c->head.uid_len == 7)
+	{
+		uint8_t pwd[4], pack[2];
+		if (nfc_poller_amiibo_pwd(c->head.uid, c->head.uid_len, pwd, pack))
+		{
+			memcpy(dict[count], pwd, 4);
+			count++;
+		}
+	}
+
+	/* Optional user dictionary: one 8-hex-digit password per line */
+	{
+		FIL f;
+		if (m1_fb_open_file(&f, NFC_PWD_DICT_FILE) == 0)
+		{
+			char buf[256];
+			uint16_t rd = m1_fb_read_from_file(&f, buf, sizeof(buf) - 1);
+			m1_fb_close_file(&f);
+
+			if (rd > 0)
+			{
+				char *line;
+				buf[rd] = '\0';
+				line = strtok(buf, "\r\n");
+				while (line != NULL && count < NFC_PWD_DICT_MAX)
+				{
+					unsigned int b0, b1, b2, b3;
+					while (*line == ' ' || *line == '\t') line++;
+					if (*line != '#' && *line != '\0' &&
+					    sscanf(line, "%02X%02X%02X%02X", &b0, &b1, &b2, &b3) == 4)
+					{
+						dict[count][0] = (uint8_t)b0;
+						dict[count][1] = (uint8_t)b1;
+						dict[count][2] = (uint8_t)b2;
+						dict[count][3] = (uint8_t)b3;
+						count++;
+					}
+					line = strtok(NULL, "\r\n");
+				}
+			}
+		}
+	}
+
+	/* Built-in defaults, skipping anything already queued */
+	for (i = 0; i < (uint8_t)(sizeof(nfc_pwd_dict_builtin) / 4U) &&
+	            count < NFC_PWD_DICT_MAX; i++)
+	{
+		bool dup = false;
+		for (j = 0; j < count; j++)
+		{
+			if (memcmp(dict[j], nfc_pwd_dict_builtin[i], 4) == 0) { dup = true; break; }
+		}
+		if (!dup)
+		{
+			memcpy(dict[count], nfc_pwd_dict_builtin[i], 4);
+			count++;
+		}
+	}
+
+	return count;
+}
+
+
+/*============================================================================*/
+/**
+ * @brief  Run one read cycle with a given password and report whether the tag
+ *         accepted it. Returns false and sets *cancelled if the user backs out.
+ */
+/*============================================================================*/
+static bool nfc_pwd_try_one(const uint8_t pwd[4], bool *cancelled)
+{
+	S_M1_Buttons_Status bs;
+	S_M1_Main_Q_t q_item;
+	BaseType_t ret;
+
+	nfc_ctx_set_manual_pwd(pwd);
+	m1_app_send_q_message(nfc_worker_q_hdl, Q_EVENT_NFC_START_READ);
+
+	while (1)
+	{
+		ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+		if (ret != pdTRUE) continue;
+
+		if (q_item.q_evt_type == Q_EVENT_NFC_READ_COMPLETE)
+		{
+			return nfc_ctx_get_auth_result(NULL, NULL);
+		}
+		if (q_item.q_evt_type == Q_EVENT_KEYPAD)
+		{
+			ret = xQueueReceive(button_events_q_hdl, &bs, 0);
+			if (ret == pdTRUE && bs.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK)
+			{
+				m1_app_send_q_message(nfc_worker_q_hdl, Q_EVENT_NFC_STOP);
+				nfc_ctx_clear_manual_pwd();
+				if (cancelled) *cancelled = true;
+				return false;
+			}
+		}
+	}
+}
+
+
+/*============================================================================*/
+/**
+ * @brief nfc_tool_pwd_dict - Try known NTAG passwords against the tag
+ *
+ * Each wrong password NAKs and drops the tag back to IDLE, so every attempt
+ * costs a full read cycle. More importantly, a tag with a non-zero AUTHLIM
+ * permanently locks password auth out after that many failures — so the
+ * tag's AUTHLIM is checked first and the run is capped or refused rather
+ * than blindly hammering the card.
+ *
+ * @retval None
+ */
+/*============================================================================*/
+static void nfc_tool_pwd_dict(void)
+{
+	uint8_t dict[NFC_PWD_DICT_MAX][4];
+	uint8_t count, tried;
+	uint8_t authlim = 0;
+	bool authlim_known;
+	uint8_t max_tries;
+	bool cancelled = false;
+	bool found = false;
+	uint8_t pwd_ok[4], pack_ok[2];
+	char line[32];
+
+	/* Probe read: identifies the tag, fills the UID and reads AUTHLIM. It may
+	 * also authenticate on its own via the Amiibo path. */
+	nfc_ctx_clear_manual_pwd();
+	nfc_ctx_clear_auth_result();
+
+	m1_u8g2_firstpage();
+	u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+	u8g2_SetFont(&m1_u8g2, M1_DISP_RUN_MENU_FONT_B);
+	u8g2_DrawStr(&m1_u8g2, 2, 12, "PWD Dictionary");
+	u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+	u8g2_DrawStr(&m1_u8g2, 2, 28, "Hold card on M1");
+	u8g2_DrawStr(&m1_u8g2, 2, 40, "BACK to cancel");
+	m1_u8g2_nextpage();
+
+	m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_M, LED_FASTBLINK_ONTIME_M);
+
+	{
+		S_M1_Buttons_Status bs;
+		S_M1_Main_Q_t q_item;
+		BaseType_t ret;
+		bool probed = false;
+
+		m1_app_send_q_message(nfc_worker_q_hdl, Q_EVENT_NFC_START_READ);
+
+		while (!probed)
+		{
+			ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+			if (ret != pdTRUE) continue;
+
+			if (q_item.q_evt_type == Q_EVENT_NFC_READ_COMPLETE)
+			{
+				probed = true;
+			}
+			else if (q_item.q_evt_type == Q_EVENT_KEYPAD)
+			{
+				ret = xQueueReceive(button_events_q_hdl, &bs, 0);
+				if (ret == pdTRUE && bs.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK)
+				{
+					m1_app_send_q_message(nfc_worker_q_hdl, Q_EVENT_NFC_STOP);
+					m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_OFF, LED_FASTBLINK_ONTIME_OFF);
+					return;
+				}
+			}
+		}
+	}
+
+	m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_OFF, LED_FASTBLINK_ONTIME_OFF);
+
+	{
+		nfc_run_ctx_t *c = nfc_ctx_get();
+		if (c == NULL || c->head.uid_len == 0)
+		{
+			m1_message_box(&m1_u8g2, "No tag found", NULL, " ", res_string(IDS_BACK));
+			return;
+		}
+	}
+
+	/* The probe read may already have unlocked it (Amiibo tags) */
+	if (nfc_ctx_get_auth_result(pwd_ok, pack_ok))
+	{
+		found = true;
+		goto report;
+	}
+
+	authlim_known = nfc_ctx_get_authlim(&authlim);
+
+	/* Decide how many failures this tag can safely absorb */
+	if (!authlim_known)
+	{
+		if (m1_message_box_choice(&m1_u8g2, "AUTHLIM unknown",
+		                          "CONFIG unreadable.",
+		                          "Tag may lock out.", "Cancel\nRun") != 1)
+			return;
+		max_tries = 3;   /* conservative when flying blind */
+	}
+	else if (authlim == 0)
+	{
+		max_tries = NFC_PWD_DICT_MAX;   /* unlimited attempts allowed */
+	}
+	else if (authlim <= 1)
+	{
+		snprintf(line, sizeof(line), "AUTHLIM=%u", (unsigned)authlim);
+		m1_message_box(&m1_u8g2, "Refusing to try", line,
+		               "Would lock tag", res_string(IDS_BACK));
+		return;
+	}
+	else
+	{
+		snprintf(line, sizeof(line), "AUTHLIM=%u, try %u", (unsigned)authlim,
+		         (unsigned)(authlim - 1U));
+		if (m1_message_box_choice(&m1_u8g2, "Tag locks out!", line,
+		                          "after failures", "Cancel\nRun") != 1)
+			return;
+		max_tries = (uint8_t)(authlim - 1U);   /* always leave one spare */
+	}
+
+	count = nfc_pwd_dict_build(dict);
+	if (count == 0)
+	{
+		m1_message_box(&m1_u8g2, "No passwords", "in dictionary", " ", res_string(IDS_BACK));
+		return;
+	}
+	if (count > max_tries)
+		count = max_tries;
+
+	m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_M, LED_FASTBLINK_ONTIME_M);
+
+	for (tried = 0; tried < count && !found && !cancelled; tried++)
+	{
+		m1_u8g2_firstpage();
+		u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+		u8g2_SetFont(&m1_u8g2, M1_DISP_RUN_MENU_FONT_B);
+		u8g2_DrawStr(&m1_u8g2, 2, 12, "PWD Dictionary");
+		u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+		snprintf(line, sizeof(line), "Trying %u/%u",
+		         (unsigned)(tried + 1U), (unsigned)count);
+		u8g2_DrawStr(&m1_u8g2, 2, 26, line);
+		snprintf(line, sizeof(line), "%02X %02X %02X %02X",
+		         dict[tried][0], dict[tried][1], dict[tried][2], dict[tried][3]);
+		u8g2_DrawStr(&m1_u8g2, 2, 38, line);
+		u8g2_DrawStr(&m1_u8g2, 2, 50, "BACK to stop");
+		m1_u8g2_nextpage();
+
+		if (nfc_pwd_try_one(dict[tried], &cancelled))
+		{
+			found = nfc_ctx_get_auth_result(pwd_ok, pack_ok);
+		}
+	}
+
+	nfc_ctx_clear_manual_pwd();
+	m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_OFF, LED_FASTBLINK_ONTIME_OFF);
+
+	if (cancelled)
+		return;
+
+report:
+	if (!found)
+	{
+		m1_message_box(&m1_u8g2, "No password found", "Try Unlock with", "Reader instead",
+		               res_string(IDS_BACK));
+		return;
+	}
+
+	{
+		bool saved = nfc_save_recovered_pwd(pwd_ok, pack_ok);
+		char pwd_line[24], pack_line[24];
+
+		snprintf(pwd_line, sizeof(pwd_line), "PWD %02X%02X%02X%02X",
+		         pwd_ok[0], pwd_ok[1], pwd_ok[2], pwd_ok[3]);
+		snprintf(pack_line, sizeof(pack_line), "PACK %02X%02X %s",
+		         pack_ok[0], pack_ok[1], saved ? "saved" : "(save err)");
+
+		m1_message_box(&m1_u8g2, "Password found!", pwd_line, pack_line,
+		               res_string(IDS_BACK));
+	}
+}
+
+
+/*============================================================================*/
+/**
  * @brief nfc_tools - NFC tools menu with Tag Info, Clone Emulate, NFC Fuzzer
  *
  * Provides a submenu of NFC utility tools accessible from the main NFC menu.
@@ -3400,6 +3785,7 @@ void nfc_tools(void)
 					case 3: nfc_utils_write_uid_run(); break;
 					case 4: nfc_utils_wipe_tag_run();  break;
 					case 5: nfc_utils_write_ndef_run(); break;
+					case 6: nfc_tool_pwd_dict();       break;
 					default: break;
 				}
 				/* Redraw submenu after returning from a tool */

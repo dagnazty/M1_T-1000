@@ -485,6 +485,7 @@ target_sources(m1_01 INTERFACE
     ../../USB/Class/HID/Src/usbd_hid.c
     ../../m1_csrc/m1_badusb.c
     ../../m1_csrc/m1_badusb_fingerprint.c
+    ../../m1_csrc/m1_kb_layout.c
     # === Enhanced firmware: Bad-BT (Phase 8) ===
     ../../m1_csrc/m1_badbt.c
     # === Enhanced firmware: Built-in Games (Phase 9) ===

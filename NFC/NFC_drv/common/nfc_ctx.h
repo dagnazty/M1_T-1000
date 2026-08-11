@@ -379,5 +379,47 @@ void nfc_ctx_clear_captured_pwd(void);
  */
 bool nfc_ctx_get_best_pwd(uint8_t pwd_out[4], nfc_pwd_source_t *source);
 
+/**
+ * @brief Record the outcome of a PWD_AUTH attempt
+ *
+ * Called by the poller after every PWD_AUTH so the UI can tell whether the
+ * password worked, rather than only seeing it in the serial log.
+ *
+ * @param[in] ok    true if the tag accepted the password
+ * @param[in] pwd   4-byte password that was tried
+ * @param[in] pack  2-byte PACK returned by the tag (valid when ok)
+ */
+void nfc_ctx_set_auth_result(bool ok, const uint8_t pwd[4], const uint8_t pack[2]);
+
+/**
+ * @brief Get the last successful PWD_AUTH result
+ * @param[out] pwd_out  4-byte password (optional, NULL ok)
+ * @param[out] pack_out 2-byte PACK (optional, NULL ok)
+ * @retval true The last read authenticated successfully
+ */
+bool nfc_ctx_get_auth_result(uint8_t pwd_out[4], uint8_t pack_out[2]);
+
+/** Forget any recorded PWD_AUTH result. */
+void nfc_ctx_clear_auth_result(void);
+
+/**
+ * @brief Record the tag's AUTHLIM (failed-auth attempt limit)
+ *
+ * AUTHLIM is the low 3 bits of the NTAG21x ACCESS byte. Zero means unlimited
+ * attempts; any other value is the number of wrong passwords the tag will
+ * accept before it locks password auth out permanently.
+ *
+ * @param[in] known    true if the CONFIG page was readable
+ * @param[in] authlim  AUTHLIM value (0-7), meaningful only when known
+ */
+void nfc_ctx_set_authlim(bool known, uint8_t authlim);
+
+/**
+ * @brief Get the tag's AUTHLIM
+ * @param[out] authlim_out AUTHLIM value (optional, NULL ok)
+ * @retval true CONFIG was readable and the value is trustworthy
+ */
+bool nfc_ctx_get_authlim(uint8_t *authlim_out);
+
 
 #endif /* NFC_DRV_NFC_CTX_H_ */

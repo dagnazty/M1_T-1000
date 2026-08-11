@@ -666,13 +666,18 @@ void m1_sdcard_mount(void)
 	sd_fres = f_mount(&sdcard_ctl.sdfs, sdcard_ctl.sdpath, 1);
 	if (sd_fres==FR_OK || sd_fres==FR_NO_FILESYSTEM)
 	{
-		sd_fres = f_getfree(sdcard_ctl.sdpath, &sd_free_clusters, &sd_pfatfs);
+		/* No f_getfree() here. Mounting with opt=1 already read and validated the
+		 * boot sector and BPB, so an FR_OK mount proves the volume is usable.
+		 * f_getfree only adds a free-cluster count that nothing reads — the info
+		 * screen recomputes it on demand — and it is expensive enough to dominate
+		 * boot: on exFAT (FF_FS_EXFAT=1) it always walks the whole allocation
+		 * bitmap, and on FAT32 it walks the entire FAT whenever FSINFO is stale,
+		 * which is the normal state after a PC writes the card. Seconds of I/O on
+		 * a large card, on every single boot. */
 		if(sd_fres==FR_OK)
 			sdcard_ctl.status = SD_access_OK;
-		else if(sd_fres==FR_NO_FILESYSTEM)
-			sdcard_ctl.status = SD_access_NoFS;
 		else
-			sdcard_ctl.status = SD_access_NotOK;
+			sdcard_ctl.status = SD_access_NoFS;
 	} // if (sd_fres==FR_OK || sd_fres==FR_NO_FILESYSTEM)
 	else
 	{

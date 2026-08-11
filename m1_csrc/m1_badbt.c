@@ -21,6 +21,7 @@
 #include "m1_sdcard.h"
 #include "m1_compile_cfg.h"
 #include "m1_badbt.h"
+#include "m1_kb_layout.h"
 #include "m1_esp32_hal.h"
 #include "esp_app_main.h"
 #include "ctrl_api.h"
@@ -41,171 +42,10 @@
 #define BADBT_INTER_CHAR_MS       10    /* Between characters in STRING */
 #define BADBT_CONNECT_TIMEOUT     120   /* Seconds to wait for BLE connection */
 
-/* HID Modifier bits (same as USB HID) */
-#define HID_MOD_LCTRL   0x01
-#define HID_MOD_LSHIFT  0x02
-#define HID_MOD_LALT    0x04
-#define HID_MOD_LGUI    0x08
-
-/* HID Keyboard scancodes */
-#define KEY_NONE                  0x00
-#define KEY_A                     0x04
-#define KEY_B                     0x05
-#define KEY_C                     0x06
-#define KEY_D                     0x07
-#define KEY_E                     0x08
-#define KEY_F                     0x09
-#define KEY_G                     0x0A
-#define KEY_H                     0x0B
-#define KEY_I                     0x0C
-#define KEY_J                     0x0D
-#define KEY_K                     0x0E
-#define KEY_L                     0x0F
-#define KEY_M                     0x10
-#define KEY_N                     0x11
-#define KEY_O                     0x12
-#define KEY_P                     0x13
-#define KEY_Q                     0x14
-#define KEY_R                     0x15
-#define KEY_S                     0x16
-#define KEY_T                     0x17
-#define KEY_U                     0x18
-#define KEY_V                     0x19
-#define KEY_W                     0x1A
-#define KEY_X                     0x1B
-#define KEY_Y                     0x1C
-#define KEY_Z                     0x1D
-#define KEY_1                     0x1E
-#define KEY_2                     0x1F
-#define KEY_3                     0x20
-#define KEY_4                     0x21
-#define KEY_5                     0x22
-#define KEY_6                     0x23
-#define KEY_7                     0x24
-#define KEY_8                     0x25
-#define KEY_9                     0x26
-#define KEY_0                     0x27
-#define KEY_ENTER                 0x28
-#define KEY_ESCAPE                0x29
-#define KEY_BACKSPACE             0x2A
-#define KEY_TAB                   0x2B
-#define KEY_SPACE                 0x2C
-#define KEY_MINUS                 0x2D
-#define KEY_EQUAL                 0x2E
-#define KEY_LEFTBRACE             0x2F
-#define KEY_RIGHTBRACE            0x30
-#define KEY_BACKSLASH             0x31
-#define KEY_SEMICOLON             0x33
-#define KEY_APOSTROPHE            0x34
-#define KEY_GRAVE                 0x35
-#define KEY_COMMA                 0x36
-#define KEY_DOT                   0x37
-#define KEY_SLASH                 0x38
-#define KEY_CAPSLOCK              0x39
-#define KEY_F1                    0x3A
-#define KEY_F2                    0x3B
-#define KEY_F3                    0x3C
-#define KEY_F4                    0x3D
-#define KEY_F5                    0x3E
-#define KEY_F6                    0x3F
-#define KEY_F7                    0x40
-#define KEY_F8                    0x41
-#define KEY_F9                    0x42
-#define KEY_F10                   0x43
-#define KEY_F11                   0x44
-#define KEY_F12                   0x45
-#define KEY_PRINTSCREEN           0x46
-#define KEY_SCROLLLOCK            0x47
-#define KEY_PAUSE                 0x48
-#define KEY_INSERT                0x49
-#define KEY_HOME                  0x4A
-#define KEY_PAGEUP                0x4B
-#define KEY_DELETE                0x4C
-#define KEY_END                   0x4D
-#define KEY_PAGEDOWN              0x4E
-#define KEY_RIGHT                 0x4F
-#define KEY_LEFT                  0x50
-#define KEY_DOWN                  0x51
-#define KEY_UP                    0x52
-#define KEY_NUMLOCK               0x53
-#define KEY_MENU                  0x65
-
-/************************** S T R U C T U R E S *******************************/
-
-/* ASCII to HID scancode + shift modifier mapping */
-typedef struct
-{
-    uint8_t keycode;
-    uint8_t shift;    /* 1 = shift required */
-} ascii_hid_map_t;
-
 /***************************** V A R I A B L E S ******************************/
 
 static badbt_state_t badbt_state;
 static ctrl_cmd_t badbt_req;  /* initialized via CTRL_CMD_DEFAULT_REQ() before use */
-
-/* ASCII to HID scancode table (US keyboard layout, indices 0x20-0x7E) */
-static const ascii_hid_map_t ascii_to_hid[] =
-{
-    /* 0x20 ' '  */ {KEY_SPACE,      0},
-    /* 0x21 '!'  */ {KEY_1,          1},
-    /* 0x22 '"'  */ {KEY_APOSTROPHE, 1},
-    /* 0x23 '#'  */ {KEY_3,          1},
-    /* 0x24 '$'  */ {KEY_4,          1},
-    /* 0x25 '%'  */ {KEY_5,          1},
-    /* 0x26 '&'  */ {KEY_7,          1},
-    /* 0x27 '\'' */ {KEY_APOSTROPHE, 0},
-    /* 0x28 '('  */ {KEY_9,          1},
-    /* 0x29 ')'  */ {KEY_0,          1},
-    /* 0x2A '*'  */ {KEY_8,          1},
-    /* 0x2B '+'  */ {KEY_EQUAL,      1},
-    /* 0x2C ','  */ {KEY_COMMA,      0},
-    /* 0x2D '-'  */ {KEY_MINUS,      0},
-    /* 0x2E '.'  */ {KEY_DOT,        0},
-    /* 0x2F '/'  */ {KEY_SLASH,      0},
-    /* 0x30 '0'  */ {KEY_0,          0},
-    /* 0x31 '1'  */ {KEY_1,          0},
-    /* 0x32 '2'  */ {KEY_2,          0},
-    /* 0x33 '3'  */ {KEY_3,          0},
-    /* 0x34 '4'  */ {KEY_4,          0},
-    /* 0x35 '5'  */ {KEY_5,          0},
-    /* 0x36 '6'  */ {KEY_6,          0},
-    /* 0x37 '7'  */ {KEY_7,          0},
-    /* 0x38 '8'  */ {KEY_8,          0},
-    /* 0x39 '9'  */ {KEY_9,          0},
-    /* 0x3A ':'  */ {KEY_SEMICOLON,  1},
-    /* 0x3B ';'  */ {KEY_SEMICOLON,  0},
-    /* 0x3C '<'  */ {KEY_COMMA,      1},
-    /* 0x3D '='  */ {KEY_EQUAL,      0},
-    /* 0x3E '>'  */ {KEY_DOT,        1},
-    /* 0x3F '?'  */ {KEY_SLASH,      1},
-    /* 0x40 '@'  */ {KEY_2,          1},
-    /* 0x41-0x5A: A-Z */
-    {KEY_A, 1}, {KEY_B, 1}, {KEY_C, 1}, {KEY_D, 1}, {KEY_E, 1},
-    {KEY_F, 1}, {KEY_G, 1}, {KEY_H, 1}, {KEY_I, 1}, {KEY_J, 1},
-    {KEY_K, 1}, {KEY_L, 1}, {KEY_M, 1}, {KEY_N, 1}, {KEY_O, 1},
-    {KEY_P, 1}, {KEY_Q, 1}, {KEY_R, 1}, {KEY_S, 1}, {KEY_T, 1},
-    {KEY_U, 1}, {KEY_V, 1}, {KEY_W, 1}, {KEY_X, 1}, {KEY_Y, 1},
-    {KEY_Z, 1},
-    /* 0x5B '['  */ {KEY_LEFTBRACE,  0},
-    /* 0x5C '\\' */ {KEY_BACKSLASH,  0},
-    /* 0x5D ']'  */ {KEY_RIGHTBRACE, 0},
-    /* 0x5E '^'  */ {KEY_6,          1},
-    /* 0x5F '_'  */ {KEY_MINUS,      1},
-    /* 0x60 '`'  */ {KEY_GRAVE,      0},
-    /* 0x61-0x7A: a-z */
-    {KEY_A, 0}, {KEY_B, 0}, {KEY_C, 0}, {KEY_D, 0}, {KEY_E, 0},
-    {KEY_F, 0}, {KEY_G, 0}, {KEY_H, 0}, {KEY_I, 0}, {KEY_J, 0},
-    {KEY_K, 0}, {KEY_L, 0}, {KEY_M, 0}, {KEY_N, 0}, {KEY_O, 0},
-    {KEY_P, 0}, {KEY_Q, 0}, {KEY_R, 0}, {KEY_S, 0}, {KEY_T, 0},
-    {KEY_U, 0}, {KEY_V, 0}, {KEY_W, 0}, {KEY_X, 0}, {KEY_Y, 0},
-    {KEY_Z, 0},
-    /* 0x7B '{'  */ {KEY_LEFTBRACE,  1},
-    /* 0x7C '|'  */ {KEY_BACKSLASH,  1},
-    /* 0x7D '}'  */ {KEY_RIGHTBRACE, 1},
-    /* 0x7E '~'  */ {KEY_GRAVE,      1},
-};
-
 
 /********************* F U N C T I O N   P R O T O T Y P E S ******************/
 
@@ -268,9 +108,11 @@ static void badbt_type_char(char c)
         return;
     }
 
-    const ascii_hid_map_t *entry = &ascii_to_hid[c - 0x20];
-    uint8_t mod = entry->shift ? HID_MOD_LSHIFT : 0;
-    badbt_send_key(mod, entry->keycode);
+    uint8_t keycode, mod;
+    if (kb_layout_lookup(c, &keycode, &mod))
+    {
+        badbt_send_key(mod, keycode);
+    }
 }
 
 
@@ -346,7 +188,9 @@ static uint8_t badbt_parse_key_name(const char *name)
     /* Single printable character */
     if (strlen(name) == 1 && name[0] >= 0x20 && name[0] <= 0x7E)
     {
-        return ascii_to_hid[name[0] - 0x20].keycode;
+        uint8_t keycode, mod;
+        if (kb_layout_lookup(name[0], &keycode, &mod))
+            return keycode;
     }
 
     return KEY_NONE;
@@ -498,9 +342,9 @@ static bool badbt_parse_line(const char *line)
                 {
                     if (strlen(keybuf) == 1 && keybuf[0] >= 0x20 && keybuf[0] <= 0x7E)
                     {
-                        uint8_t char_mod = ascii_to_hid[keybuf[0] - 0x20].shift ?
-                                           HID_MOD_LSHIFT : 0;
-                        mod_accum |= char_mod;
+                        uint8_t char_key, char_mod;
+                        if (kb_layout_lookup(keybuf[0], &char_key, &char_mod))
+                            mod_accum |= char_mod;
                     }
                     badbt_send_key(mod_accum, keycode);
                 }

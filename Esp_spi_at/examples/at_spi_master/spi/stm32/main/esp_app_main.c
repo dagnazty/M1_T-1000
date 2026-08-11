@@ -81,6 +81,27 @@ static void spi_mutex_unlock(void)
     xSemaphoreGive(pxMutex);
 }
 
+/**
+  * @brief  Sleep that yields the CPU when the scheduler is up.
+  *
+  * The C6 bring-up waits are long (up to 10s of retries while the slave boots)
+  * and run from menu_main_handler_task, which outranks m1_wdt_handler_task.
+  * HAL_Delay() busy-spins, so waiting that way starved the watchdog task and a
+  * slow or absent C6 became a reset on the way into the menu. This lets the
+  * watchdog task run its normal checkin/checkout protocol — it does not reload
+  * the IWDG directly, so a genuine hang still resets the device.
+  *
+  * @param  ms  delay in milliseconds
+  * @retval None
+  */
+static void esp_sleep_ms(uint32_t ms)
+{
+    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
+        vTaskDelay(pdMS_TO_TICKS(ms));
+    else
+        HAL_Delay(ms);
+}
+
 static void spi_AT_reset_response_channel(void)
 {
 	if (ctrl_msg_Q)
@@ -650,7 +671,7 @@ static void init_master_hd(spi_device_handle_t* spi)
             break;  /* Got a valid response from slave */
         }
         spi_mutex_unlock();
-        HAL_Delay(500);  /* Wait 500ms between retries */
+        esp_sleep_ms(500);  /* Wait 500ms between retries */
         spi_mutex_lock();
     }
     if (retry >= 20) {
@@ -726,7 +747,7 @@ static void reset_slave(void)
 	/* Brief delay for ESP32-C6 SPI slave to initialize after reset.
 	 * Stock firmware used hard_delay(200) here (~200ms busy-loop).
 	 * The handshake pin check in esp32_main_init() catches missed events. */
-	HAL_Delay(200);
+	esp_sleep_ms(200);
 }
 
 
@@ -754,7 +775,7 @@ static bool esp_wait_at_ready(int max_tries)
 		{
 			return true;
 		}
-		HAL_Delay(150);
+		esp_sleep_ms(150);
 	}
 	return false;
 }
@@ -812,7 +833,7 @@ bool esp32_at_wake_wait(void)
 	if ( !esp32_main_init_done )
 		return false;
 
-	HAL_Delay(200); /* C6 boot time before its SPI slave driver is up */
+	esp_sleep_ms(200); /* C6 boot time before its SPI slave driver is up */
 
 	/* If handshake is already HIGH the rising edge was missed while EXTI was
 	 * disabled — inject it so spi_trans_control_task processes the event. */

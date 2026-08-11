@@ -33,6 +33,7 @@
 #include "m1_file_util.h"
 #include "m1_rgb_backlight.h"
 #include "m1_builtin_apps.h"
+#include "m1_kb_layout.h"
 
 /*************************** D E F I N E S ************************************/
 
@@ -766,6 +767,13 @@ void settings_save_to_sd(void)
     f_write(&fp, buf, strlen(buf), &bw);
 #endif
 
+    /* Empty when the built-in US layout is active */
+    {
+        char kb_buf[KB_LAYOUT_PATH_MAX + 16];
+        snprintf(kb_buf, sizeof(kb_buf), "kb_layout=%s\n", kb_layout_path());
+        f_write(&fp, kb_buf, strlen(kb_buf), &bw);
+    }
+
     f_close(&fp);
 }
 
@@ -955,6 +963,29 @@ void settings_load_from_sd(void)
     }
 #endif
 
+    /* Parse "kb_layout=<path>" — BadUSB/Bad-BT keyboard layout. An empty or
+     * missing value keeps the built-in US layout. */
+    p = strstr(buf, "kb_layout=");
+    if (p != NULL)
+    {
+        char kb_path[KB_LAYOUT_PATH_MAX];
+        char *end;
+        size_t len;
+
+        p += 10;  /* skip "kb_layout=" */
+        end = strchr(p, '\n');
+        if (!end) end = p + strlen(p);
+
+        len = (size_t)(end - p);
+        if (len > 0 && len < sizeof(kb_path))
+        {
+            memcpy(kb_path, p, len);
+            kb_path[len] = '\0';
+            if (!kb_layout_load(kb_path))
+                M1_LOG_W(SETTINGS_TAG, "Layout load failed: %s\r\n", kb_path);
+        }
+    }
+
 apply:
     /* Apply backlight */
     m1_backlight_on(s_brightness_values[m1_brightness_level]);
@@ -981,10 +1012,12 @@ void settings_ensure_sd_folders(void)
 {
     static const char * const dirs[] = {
         "0:/NFC",
+        "0:/NFC/assets",
         "0:/RFID",
         "0:/SUBGHZ",
         "0:/IR",
         "0:/BadUSB",
+        KB_LAYOUT_DIR,
         "0:/BT",
         "0:/System",
         "0:/apps"

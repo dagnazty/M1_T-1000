@@ -1004,5 +1004,56 @@ bool nfc_ctx_get_best_pwd(uint8_t pwd_out[4], nfc_pwd_source_t *source)
     return false;
 }
 
+static uint8_t s_auth_pwd[4]  = {0};
+static uint8_t s_auth_pack[2] = {0};
+static bool    s_auth_ok      = false;
+
+static uint8_t s_authlim       = 0;
+static bool    s_authlim_known = false;
+
+void nfc_ctx_set_auth_result(bool ok, const uint8_t pwd[4], const uint8_t pack[2])
+{
+    s_auth_ok = ok;
+
+    if (!ok) {
+        return;
+    }
+
+    if (pwd)  memcpy(s_auth_pwd, pwd, 4);
+    if (pack) memcpy(s_auth_pack, pack, 2);
+
+    platformLog("[PWD] Auth OK: pwd=%02X %02X %02X %02X pack=%02X %02X\r\n",
+                s_auth_pwd[0], s_auth_pwd[1], s_auth_pwd[2], s_auth_pwd[3],
+                s_auth_pack[0], s_auth_pack[1]);
+}
+
+bool nfc_ctx_get_auth_result(uint8_t pwd_out[4], uint8_t pack_out[2])
+{
+    if (!s_auth_ok) return false;
+    if (pwd_out)  memcpy(pwd_out, s_auth_pwd, 4);
+    if (pack_out) memcpy(pack_out, s_auth_pack, 2);
+    return true;
+}
+
+void nfc_ctx_clear_auth_result(void)
+{
+    s_auth_ok = false;
+    memset(s_auth_pwd, 0, 4);
+    memset(s_auth_pack, 0, 2);
+}
+
+void nfc_ctx_set_authlim(bool known, uint8_t authlim)
+{
+    s_authlim_known = known;
+    s_authlim = known ? (uint8_t)(authlim & 0x07U) : 0U;
+}
+
+bool nfc_ctx_get_authlim(uint8_t *authlim_out)
+{
+    if (!s_authlim_known) return false;
+    if (authlim_out) *authlim_out = s_authlim;
+    return true;
+}
+
 
 /* --------- Mifare Classic helpers ---------- */

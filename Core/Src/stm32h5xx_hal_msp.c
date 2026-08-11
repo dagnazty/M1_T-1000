@@ -220,6 +220,19 @@ void HAL_RTC_MspInit(RTC_HandleTypeDef* hrtc)
 
   /* USER CODE END RTC_MspInit 0 */
 
+    /* Unlock backup-domain writes BEFORE anything touches the RTC.
+     *
+     * This used to happen only as a side effect of HAL_RCCEx_PeriphCLKConfig()
+     * below (it does SET_BIT(PWR->DBPCR, PWR_DBPCR_DBP)), and that call is
+     * skipped whenever RTCSEL is already set — which is the case on every unit
+     * whose backup domain survived, i.e. anything coming from stock firmware.
+     * DBP then stayed 0, so RTC registers were write protected: HAL_RTC_Init()
+     * could not set INIT in RTC->ICSR, INITF never came up, it timed out, and
+     * MX_RTC_Init() dropped straight into Error_Handler() (__disable_irq() +
+     * spin) before the scheduler, display or USB ever started. Dead device,
+     * and only on units with a pre-configured backup domain. */
+    HAL_PWR_EnableBkUpAccess();
+
   /** Initializes the peripherals clock
   */
     if (READ_BIT(RCC->BDCR, RCC_BDCR_RTCSEL) == RCC_RTCCLKSOURCE_NO_CLK)

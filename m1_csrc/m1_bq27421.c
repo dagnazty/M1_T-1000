@@ -339,15 +339,26 @@ bool bq27421_init( uint16_t designCapacity_mAh, uint16_t terminateVoltage_mV, ui
     bq27421_i2c_control_write( BQ27421_CONTROL_SET_CFGUPDATE );
 
     // Poll flags
+    /* Bounded. This runs from battery_service_init() during boot, and a gauge
+     * that never reports CFGUPMODE (unpowered, held in reset, dead I2C bus, or
+     * simply absent) spun here forever. Give up and leave the gauge
+     * unconfigured — everything else on the device works without it.
+     * NOTE: deliberately no watchdog reload in this loop. The IWDG firing here
+     * is the recovery path for a wedged boot, not something to suppress. */
+    int16_t cfgup_timeout = BQ27241_I2C_TIMEOUT;
     do
     {
         bq27421_i2c_command_read( BQ27421_FLAGS_LOW, &flags );
         if( !(flags & BQ27421_FLAG_CFGUPMODE) )	// CFGUPMODE ?
         {
             HAL_Delay( 1 );
+            cfgup_timeout--;
         }
     }
-    while( !(flags & BQ27421_FLAG_CFGUPMODE) );
+    while( !(flags & BQ27421_FLAG_CFGUPMODE) && (cfgup_timeout > 0) );
+
+    if( !(flags & BQ27421_FLAG_CFGUPMODE) )
+        return false;
 
     //
     // read 0x52
