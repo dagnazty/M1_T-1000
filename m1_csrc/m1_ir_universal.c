@@ -183,6 +183,24 @@ void ir_universal_run(void)
 
 /*============================================================================*/
 /*
+ * Open one .ir file directly in the scrolling button-list replay screen
+ * (parse + list + UP/DOWN + OK=transmit + BACK=return). Thin public entry so
+ * other modules (e.g. custom remotes) reuse the exact parse/list/TX path
+ * without duplicating transmit logic.
+ */
+/*============================================================================*/
+void ir_replay_file(const char *path)
+{
+	if (path == NULL)
+		return;
+
+	show_commands(path);
+} // void ir_replay_file(const char *path)
+
+
+
+/*============================================================================*/
+/*
  * Draw the dashboard menu on the 128x64 display
  */
 /*============================================================================*/

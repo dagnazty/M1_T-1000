@@ -2,6 +2,29 @@
 
 All notable changes to the M1 T-1000 firmware will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Infrared → Custom Remotes: build, learn, replay, and edit custom IR
+  remotes on-device.** User remotes are standard Flipper `.ir` files at
+  `0:/IR/*.ir`:
+  - Create a named, empty remote via the on-screen keyboard (name sanitized to
+    a FAT-legal filename and de-duplicated).
+  - Learn buttons from the IR receiver. IRMP-decodable signals are stored as
+    parsed buttons; signals IRMP cannot decode fall back to a **raw** capture
+    (mark/space edge stream), so undecodable remotes can still be saved. Raw
+    captures are finalized on the inter-frame gap and noise-filtered.
+  - Replay through the shared button-list engine (parsed and raw both transmit).
+  - Edit buttons: **rename** and **delete** (delete is confirmation-gated), via
+    an atomic read-all → temp → rename rewrite that preserves every other
+    button.
+  - See `documentation/custom_remotes.md`.
+- **New Universal Remote categories:** `Bluray/` (Sony, Samsung), `Monitor/`
+  (universal power), `LEDs/` (24-key RGB strip), and `Streaming/` (Apple TV,
+  Roku) `.ir` sets under `ir_database/`.
+- **Host `.ir` tooling:** `tools/host_test/validate_ir` plus a `validate.sh`
+  regression sweep (round-trip unit suite + validation of every shipped `.ir`).
+
 ## [0.2.1] - 2026-06-29
 
 ### Fixed

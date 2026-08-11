@@ -1,0 +1,37 @@
+Filetype: IR signals file
+Version: 1
+
+#
+name: Power
+type: parsed
+protocol: Samsung32
+address: 07 07 00 00
+command: 02 00 00 00
+
+#
+name: Eject
+type: parsed
+protocol: Samsung32
+address: 07 07 00 00
+command: 0C 00 00 00
+
+#
+name: Play
+type: parsed
+protocol: Samsung32
+address: 07 07 00 00
+command: 47 00 00 00
+
+#
+name: Pause
+type: parsed
+protocol: Samsung32
+address: 07 07 00 00
+command: 4D 00 00 00
+
+#
+name: Stop
+type: parsed
+protocol: Samsung32
+address: 07 07 00 00
+command: 46 00 00 00

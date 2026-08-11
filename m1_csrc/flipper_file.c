@@ -132,6 +132,33 @@ bool ff_open_write(flipper_file_t *ctx, const char *path)
 
 /*============================================================================*/
 /**
+ * @brief  Open a Flipper file for appending. The write position starts at the
+ *         end of the file, and the file is created if it does not exist. The
+ *         existing content (e.g. header + earlier signals) is preserved.
+ * @param  ctx   flipper file context
+ * @param  path  file path on FatFs filesystem
+ * @return true on success
+ */
+bool ff_open_append(flipper_file_t *ctx, const char *path)
+{
+	FRESULT res;
+
+	if (ctx == NULL || path == NULL)
+		return false;
+
+	memset(ctx, 0, sizeof(flipper_file_t));
+
+	res = f_open(&ctx->fh, path, FA_WRITE | FA_OPEN_APPEND);
+	if (res != FR_OK)
+		return false;
+
+	ctx->is_open = true;
+	ctx->eof = false;
+	return true;
+}
+
+/*============================================================================*/
+/**
  * @brief  Close an open Flipper file
  * @param  ctx  flipper file context
  */

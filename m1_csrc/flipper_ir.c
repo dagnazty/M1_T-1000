@@ -338,6 +338,21 @@ bool flipper_ir_write_header(flipper_file_t *ctx)
 
 /*============================================================================*/
 /**
+ * @brief  Open an existing .ir file to append further signals. The file must
+ *         already contain a valid header (written earlier via
+ *         flipper_ir_write_header); this positions at EOF so the next
+ *         flipper_ir_write_signal() appends without duplicating the header.
+ * @param  ctx   flipper file context
+ * @param  path  file path
+ * @return true if the file was opened for appending
+ */
+bool flipper_ir_open_append(flipper_file_t *ctx, const char *path)
+{
+	return ff_open_append(ctx, path);
+}
+
+/*============================================================================*/
+/**
  * @brief  Write a single IR signal to a .ir file
  */
 bool flipper_ir_write_signal(flipper_file_t *ctx, const flipper_ir_signal_t *sig)
@@ -414,6 +429,269 @@ bool flipper_ir_write_signal(flipper_file_t *ctx, const flipper_ir_signal_t *sig
 	}
 
 	return true;
+}
+
+/*============================================================================*/
+/**
+ * @brief  Rewrite a .ir file, streaming every signal through a callback into a
+ *         temporary file and then atomically replacing the original. Used for
+ *         edit operations (rename/delete a button) where the variable-length
+ *         Flipper blocks make in-place editing impractical.
+ *
+ *         Only one signal is held in memory at a time (stack allocation, no
+ *         heap). The callback may mutate the signal (e.g. rename) and returns
+ *         true to keep it or false to drop it.
+ *
+ * @param  path  full path to the .ir file to rewrite in place
+ * @param  cb    per-signal callback (must not be NULL)
+ * @param  user  opaque pointer passed through to the callback
+ * @return true if the file was rewritten and replaced successfully
+ */
+bool flipper_ir_rewrite(const char *path, flipper_ir_rewrite_cb_t cb, void *user)
+{
+	flipper_file_t      src;
+	flipper_file_t      dst;
+	flipper_ir_signal_t sig;              /* single signal in flight (stack) */
+	char                tmp_path[256];
+	uint16_t            index = 0;
+	bool                ok = true;
+	int                 n;
+
+	if (path == NULL || cb == NULL)
+		return false;
+
+	/* Build "<path>.tmp"; bail out if it would be truncated. */
+	n = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+	if (n < 0 || n >= (int)sizeof(tmp_path))
+		return false;
+
+	/* Open source (validates header) and a fresh temp destination. */
+	if (!flipper_ir_open(&src, path))
+		return false;
+
+	if (!ff_open_write(&dst, tmp_path))
+	{
+		ff_close(&src);
+		return false;
+	}
+
+	if (!flipper_ir_write_header(&dst))
+	{
+		ff_close(&src);
+		ff_close(&dst);
+		f_unlink(tmp_path);
+		return false;
+	}
+
+	/* Stream each signal through the callback into the temp file. */
+	while (flipper_ir_read_signal(&src, &sig))
+	{
+		bool keep = cb(index, &sig, user);
+		index++;
+
+		if (keep)
+		{
+			if (!flipper_ir_write_signal(&dst, &sig))
+			{
+				ok = false;
+				break;
+			}
+		}
+	}
+
+	ff_close(&src);
+	ff_close(&dst);
+
+	if (!ok)
+	{
+		f_unlink(tmp_path);
+		return false;
+	}
+
+	/* Atomically replace the original. FatFs f_rename() will not overwrite an
+	 * existing target, so unlink the original first, then rename the temp. */
+	if (f_unlink(path) != FR_OK)
+	{
+		f_unlink(tmp_path);
+		return false;
+	}
+
+	if (f_rename(tmp_path, path) != FR_OK)
+		return false;
+
+	return true;
+}
+
+/*============================================================================*/
+/**
+ * @brief  Begin accumulating a raw IR signal into sig. Clears sig, sets the raw
+ *         type, and copies the given name. Sample buffer starts empty.
+ * @param  sig   signal to initialize
+ * @param  name  signal name (may be NULL)
+ */
+void flipper_ir_raw_begin(flipper_ir_signal_t *sig, const char *name)
+{
+	if (sig == NULL)
+		return;
+
+	memset(sig, 0, sizeof(*sig));
+	sig->type = FLIPPER_IR_SIGNAL_RAW;
+	sig->valid = false;
+
+	if (name != NULL)
+	{
+		strncpy(sig->name, name, FLIPPER_IR_NAME_MAX_LEN - 1);
+		sig->name[FLIPPER_IR_NAME_MAX_LEN - 1] = '\0';
+	}
+}
+
+/*============================================================================*/
+/**
+ * @brief  Append one edge to a raw signal being accumulated. Marks (carrier on)
+ *         are stored as +duration, spaces as -duration (Flipper raw convention).
+ * @param  sig          signal being accumulated
+ * @param  duration_us  edge duration in microseconds
+ * @param  is_mark      true for a mark, false for a space
+ * @return true if appended, false if the sample buffer is full
+ */
+bool flipper_ir_raw_add_edge(flipper_ir_signal_t *sig, uint32_t duration_us, bool is_mark)
+{
+	if (sig == NULL)
+		return false;
+
+	if (sig->raw.sample_count >= FLIPPER_IR_RAW_MAX_SAMPLES)
+		return false;
+
+	sig->raw.samples[sig->raw.sample_count++] =
+		is_mark ? (int32_t)duration_us : -(int32_t)duration_us;
+
+	return true;
+}
+
+/*============================================================================*/
+/**
+ * @brief  Finish raw accumulation: record carrier frequency and duty cycle and
+ *         mark the signal valid if at least one edge was captured.
+ * @param  sig         accumulated signal
+ * @param  frequency   carrier frequency in Hz (e.g. 38000)
+ * @param  duty_cycle  carrier duty cycle (e.g. 0.33)
+ * @return true if the signal has samples (is valid)
+ */
+bool flipper_ir_raw_finish(flipper_ir_signal_t *sig, uint32_t frequency, float duty_cycle)
+{
+	if (sig == NULL)
+		return false;
+
+	sig->raw.frequency = frequency;
+	sig->raw.duty_cycle = duty_cycle;
+	sig->valid = (sig->raw.sample_count > 0);
+
+	return sig->valid;
+}
+
+/*============================================================================*/
+/**
+ * @brief  Feed one received edge into a raw capture in progress (raw learn
+ *         fallback for IRMP-undecodable signals). Ordinary edges are appended;
+ *         the inter-frame timeout marker (frame_end) closes the frame, either
+ *         finalizing the signal or discarding it as noise.
+ * @param  sig          raw signal being accumulated (from flipper_ir_raw_begin)
+ * @param  duration_us  edge duration in microseconds (ignored when frame_end)
+ * @param  is_mark      true for a mark, false for a space (ignored when frame_end)
+ * @param  frame_end    true if this is the inter-frame timeout marker
+ * @param  min_samples  minimum edges for a real frame (fewer = noise, discarded)
+ * @param  frequency    carrier frequency in Hz applied on FRAME_COMPLETE
+ * @param  duty_cycle   carrier duty cycle applied on FRAME_COMPLETE
+ * @return one of flipper_ir_raw_feed_result_t
+ */
+flipper_ir_raw_feed_result_t flipper_ir_raw_feed(flipper_ir_signal_t *sig,
+                                                 uint32_t duration_us, bool is_mark,
+                                                 bool frame_end, uint16_t min_samples,
+                                                 uint32_t frequency, float duty_cycle)
+{
+	if (sig == NULL)
+		return FLIPPER_IR_RAW_EDGE_DROPPED;
+
+	if (!frame_end)
+	{
+		return flipper_ir_raw_add_edge(sig, duration_us, is_mark)
+			? FLIPPER_IR_RAW_EDGE_ACCUMULATED
+			: FLIPPER_IR_RAW_EDGE_DROPPED;
+	}
+
+	/* End of frame: enough edges -> finalize, otherwise reset as noise. */
+	if (sig->raw.sample_count >= min_samples)
+	{
+		flipper_ir_raw_finish(sig, frequency, duty_cycle);
+		return FLIPPER_IR_RAW_FRAME_COMPLETE;
+	}
+
+	sig->raw.sample_count = 0;   /* keep the name, drop the noise samples */
+	sig->valid = false;
+	return FLIPPER_IR_RAW_FRAME_NOISE;
+}
+
+/*============================================================================*/
+/* Context + callback for flipper_ir_rename_signal(). */
+typedef struct {
+	uint16_t    target_index;
+	const char *new_name;
+} flipper_ir_rename_ctx_t;
+
+static bool flipper_ir_rename_cb(uint16_t index, flipper_ir_signal_t *sig, void *user)
+{
+	flipper_ir_rename_ctx_t *ctx = (flipper_ir_rename_ctx_t *)user;
+
+	if (index == ctx->target_index && ctx->new_name != NULL)
+	{
+		strncpy(sig->name, ctx->new_name, FLIPPER_IR_NAME_MAX_LEN - 1);
+		sig->name[FLIPPER_IR_NAME_MAX_LEN - 1] = '\0';
+	}
+	return true;   /* keep every signal */
+}
+
+/*============================================================================*/
+/**
+ * @brief  Rename the signal at target_index in a .ir file, preserving all other
+ *         signals. Out-of-range index leaves the file unchanged (returns true).
+ * @param  path          .ir file path
+ * @param  target_index  0-based index of the signal to rename
+ * @param  new_name      replacement name
+ * @return true on success (or harmless no-op)
+ */
+bool flipper_ir_rename_signal(const char *path, uint16_t target_index, const char *new_name)
+{
+	flipper_ir_rename_ctx_t ctx;
+
+	ctx.target_index = target_index;
+	ctx.new_name = new_name;
+
+	return flipper_ir_rewrite(path, flipper_ir_rename_cb, &ctx);
+}
+
+/*============================================================================*/
+/* Callback for flipper_ir_delete_signal(): drop the one matching index. The
+ * target index is passed by pointer through the rewrite user parameter. */
+static bool flipper_ir_delete_cb(uint16_t index, flipper_ir_signal_t *sig, void *user)
+{
+	uint16_t target = *(const uint16_t *)user;
+
+	(void)sig;
+	return index != target;   /* keep everything except the target */
+}
+
+/*============================================================================*/
+/**
+ * @brief  Delete the signal at target_index from a .ir file, preserving all
+ *         other signals. Deleting the last one leaves a valid header-only file.
+ *         Out-of-range index leaves the file unchanged (returns true).
+ * @param  path          .ir file path
+ * @param  target_index  0-based index of the signal to delete
+ * @return true on success (or harmless no-op)
+ */
+bool flipper_ir_delete_signal(const char *path, uint16_t target_index)
+{
+	return flipper_ir_rewrite(path, flipper_ir_delete_cb, &target_index);
 }
 
 /*============================================================================*/

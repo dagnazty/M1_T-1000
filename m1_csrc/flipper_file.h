@@ -35,6 +35,9 @@ bool ff_open(flipper_file_t *ctx, const char *path);
 /* Open a file for writing */
 bool ff_open_write(flipper_file_t *ctx, const char *path);
 
+/* Open a file for appending (seek to end; create if absent) */
+bool ff_open_append(flipper_file_t *ctx, const char *path);
+
 /* Close file */
 void ff_close(flipper_file_t *ctx);
 

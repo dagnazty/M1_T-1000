@@ -1,0 +1,58 @@
+Filetype: IR signals file
+Version: 1
+
+#
+name: Power
+type: parsed
+protocol: NEC
+address: EA C7 00 00
+command: 4B 00 00 00
+
+#
+name: Home
+type: parsed
+protocol: NEC
+address: EA C7 00 00
+command: 3A 00 00 00
+
+#
+name: Up
+type: parsed
+protocol: NEC
+address: EA C7 00 00
+command: 0B 00 00 00
+
+#
+name: Down
+type: parsed
+protocol: NEC
+address: EA C7 00 00
+command: 5B 00 00 00
+
+#
+name: Left
+type: parsed
+protocol: NEC
+address: EA C7 00 00
+command: 3B 00 00 00
+
+#
+name: Right
+type: parsed
+protocol: NEC
+address: EA C7 00 00
+command: 1B 00 00 00
+
+#
+name: OK
+type: parsed
+protocol: NEC
+address: EA C7 00 00
+command: 33 00 00 00
+
+#
+name: Back
+type: parsed
+protocol: NEC
+address: EA C7 00 00
+command: 2B 00 00 00

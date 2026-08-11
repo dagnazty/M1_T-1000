@@ -1,0 +1,5 @@
+# Compiled host-test binaries and objects — never committed.
+test_flipper_ir
+validate_ir
+*.o
+*.ir

@@ -72,8 +72,8 @@ void infrared_learn_new_remote(void);
 void infrared_saved_remotes(void);
 S_M1_IR_Tx_States infrared_transmit(uint8_t init);
 
-static void infrared_decode_sys_init(void);
-static void infrared_decode_sys_deinit(void);
+/* infrared_decode_sys_init/deinit are declared in m1_infrared.h (public so the
+ * custom-remote learn flow can reuse the IR receiver setup/teardown). */
 void infrared_encode_sys_init(void);
 void infrared_encode_sys_deinit(void);
 static void infrared_encode_timer_cb(TimerHandle_t xTimer);
@@ -627,7 +627,7 @@ static bool ir_save_learned_signal(const IRMP_DATA *data)
   * @retval None
  */
 /*============================================================================*/
-static void infrared_decode_sys_init(void)
+void infrared_decode_sys_init(void)
 {
 	GPIO_InitTypeDef gpio_init_struct;
 	TIM_IC_InitTypeDef tim_ic_init = {0};
@@ -754,7 +754,7 @@ static void infrared_decode_sys_init(void)
   * @retval None
   */
 /*============================================================================*/
-static void infrared_decode_sys_deinit(void)
+void infrared_decode_sys_deinit(void)
 {
 	HAL_TIM_IC_DeInit(&Timerhdl_IrRx);
 

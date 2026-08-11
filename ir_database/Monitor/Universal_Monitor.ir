@@ -1,0 +1,44 @@
+Filetype: IR signals file
+Version: 1
+
+#
+name: Dell_Power
+type: parsed
+protocol: NEC
+address: 04 00 00 00
+command: 08 00 00 00
+
+#
+name: HP_Power
+type: parsed
+protocol: NEC
+address: 08 00 00 00
+command: 12 00 00 00
+
+#
+name: LG_Power
+type: parsed
+protocol: NEC
+address: 04 00 00 00
+command: 08 00 00 00
+
+#
+name: Samsung_Power
+type: parsed
+protocol: Samsung32
+address: 07 00 00 00
+command: 02 00 00 00
+
+#
+name: BenQ_Power
+type: parsed
+protocol: NEC
+address: 00 00 00 00
+command: 4D 00 00 00
+
+#
+name: AOC_Power
+type: parsed
+protocol: NEC
+address: 20 DF 00 00
+command: 10 00 00 00

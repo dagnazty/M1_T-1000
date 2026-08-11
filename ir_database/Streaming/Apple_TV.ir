@@ -1,0 +1,51 @@
+Filetype: IR signals file
+Version: 1
+
+#
+name: Up
+type: parsed
+protocol: Apple
+address: EE 87 00 00
+command: 0A 00 00 00
+
+#
+name: Down
+type: parsed
+protocol: Apple
+address: EE 87 00 00
+command: 0C 00 00 00
+
+#
+name: Left
+type: parsed
+protocol: Apple
+address: EE 87 00 00
+command: 09 00 00 00
+
+#
+name: Right
+type: parsed
+protocol: Apple
+address: EE 87 00 00
+command: 06 00 00 00
+
+#
+name: Select
+type: parsed
+protocol: Apple
+address: EE 87 00 00
+command: 5C 00 00 00
+
+#
+name: Menu
+type: parsed
+protocol: Apple
+address: EE 87 00 00
+command: 03 00 00 00
+
+#
+name: Play_Pause
+type: parsed
+protocol: Apple
+address: EE 87 00 00
+command: 5F 00 00 00

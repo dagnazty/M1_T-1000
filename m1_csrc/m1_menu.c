@@ -20,6 +20,7 @@
 //#include "U8g2lib.h"
 #include "m1_gpio.h"
 #include "m1_infrared.h"
+#include "m1_ir_custom.h"
 #include "m1_nfc.h"
 #include "m1_rfid.h"
 #include "m1_settings.h"
@@ -259,10 +260,22 @@ S_M1_Menu_t menu_Infrared_Saved_Remotes =
     "Replay", infrared_saved_remotes, NULL, NULL, 0, 0, NULL, NULL, NULL
 };
 
+#ifdef M1_APP_FILE_IMPORT_ENABLE
+S_M1_Menu_t menu_Infrared_Create_Remote =
+{
+    "Custom Remotes", ir_custom_run, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+#endif
+
 S_M1_Menu_t menu_Infrared =
 {
+#ifdef M1_APP_FILE_IMPORT_ENABLE
+    "Infrared", menu_infrared_init, NULL, NULL, 4, 0, menu_m1_icon_infrared, NULL,
+    {&menu_Infrared_Universal_Remotes, &menu_Infrared_Learn_New_Remote, &menu_Infrared_Saved_Remotes, &menu_Infrared_Create_Remote}
+#else
     "Infrared", menu_infrared_init, NULL, NULL, 3, 0, menu_m1_icon_infrared, NULL,
     {&menu_Infrared_Universal_Remotes, &menu_Infrared_Learn_New_Remote, &menu_Infrared_Saved_Remotes}
+#endif
 };
 
 /*------------------------------- > GPIO -------------------------------------*/

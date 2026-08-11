@@ -95,6 +95,9 @@ void infrared_learn_new_remote(void);
 void infrared_saved_remotes(void);
 void infrared_encode_sys_init(void);
 void infrared_encode_sys_deinit(void);
+/* IR receiver setup/teardown — reused by the custom-remote learn flow. */
+void infrared_decode_sys_init(void);
+void infrared_decode_sys_deinit(void);
 S_M1_IR_Tx_States infrared_transmit(uint8_t init);
 
 extern uint32_t TIM_GetCounterCLKValue(uint16_t prescaler);

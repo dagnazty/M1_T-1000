@@ -55,4 +55,8 @@ void ir_universal_run(void);
 void ir_universal_init(void);
 void ir_universal_deinit(void);
 
+/* Open a single .ir file in the scrolling button-list replay screen
+ * (parse + list + OK=transmit). Reused by the custom-remote module. */
+void ir_replay_file(const char *path);
+
 #endif /* M1_IR_UNIVERSAL_H_ */
