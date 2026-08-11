@@ -4,6 +4,8 @@ All notable changes to the M1 T-1000 firmware will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-11
+
 ### Added
 - **Infrared → Custom Remotes: build, learn, replay, and edit custom IR
   remotes on-device.** User remotes are standard Flipper `.ir` files at
@@ -24,6 +26,9 @@ All notable changes to the M1 T-1000 firmware will be documented in this file.
   Roku) `.ir` sets under `ir_database/`.
 - **Host `.ir` tooling:** `tools/host_test/validate_ir` plus a `validate.sh`
   regression sweep (round-trip unit suite + validation of every shipped `.ir`).
+
+### Changed
+- Bumped the T-1000 firmware version to `0.2.3`.
 
 ## [0.2.1] - 2026-06-29
 
