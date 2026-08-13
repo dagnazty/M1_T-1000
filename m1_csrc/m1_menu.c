@@ -33,6 +33,7 @@
 #include "m1_wifi.h"
 #include "m1_bt.h"
 #include "m1_802154.h"
+#include "m1_link.h"
 #include "m1_esp32_hal.h"
 #include "esp_app_main.h"
 #include "m1_compile_cfg.h"
@@ -128,14 +129,31 @@ S_M1_Menu_t menu_Sub_GHz_AddManually =
     "Add Manually", sub_ghz_add_manually, NULL, NULL, 0, 0, NULL, NULL, NULL
 };
 
+#ifdef M1_APP_LINK_ENABLE
+S_M1_Menu_t menu_Sub_GHz_M1Link =
+{
+    "M1 Link", m1_link_app_run, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+#endif
+
 S_M1_Menu_t menu_Sub_GHz =
 {
-    "Sub-GHz", NULL, NULL, NULL, 13, 0, menu_m1_icon_wave, NULL,
+    "Sub-GHz", NULL, NULL, NULL,
+#ifdef M1_APP_LINK_ENABLE
+    14,
+#else
+    13,
+#endif
+    0, menu_m1_icon_wave, NULL,
     {&menu_Sub_GHz_Record, &menu_Sub_GHz_Saved,
      &menu_Sub_GHz_AddManually,
      &menu_Sub_GHz_Frequency_Reader, &menu_Sub_GHz_Spectrum, &menu_Sub_GHz_RSSI,
      &menu_Sub_GHz_FreqScanner, &menu_Sub_GHz_JamDetector, &menu_Sub_GHz_JamLog, &menu_Sub_GHz_Weather,
-     &menu_Sub_GHz_BruteForce, &menu_Sub_GHz_Regional_Information, &menu_Sub_GHz_Radio_Settings}
+     &menu_Sub_GHz_BruteForce, &menu_Sub_GHz_Regional_Information, &menu_Sub_GHz_Radio_Settings
+#ifdef M1_APP_LINK_ENABLE
+     , &menu_Sub_GHz_M1Link
+#endif
+    }
 };
 
 /*----------------------------- > 125KHz RFID --------------------------------*/

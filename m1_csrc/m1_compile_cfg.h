@@ -83,5 +83,6 @@ extern void assert_failed();
 #define M1_APP_RPC_ENABLE              /* Enable RPC protocol for qMonstatek desktop app */
 #define M1_APP_GAMES_ENABLE            /* Enable built-in Games menu */
 #define M1_APP_APPS_ENABLE             /* Enable Apps menu (ELF loader from SD card) */
+#define M1_APP_LINK_ENABLE             /* Enable M1 Link device-to-device sub-GHz FSK link (Phase 0 spike) */
 
 #endif /* M1_COMPILE_CFG_H_ */

@@ -4,6 +4,58 @@ All notable changes to the M1 T-1000 firmware will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-12
+
+### Added
+- **M1 Link — device-to-device wireless between M1 units over the Si4463
+  sub-GHz radio (915 MHz FSK packet mode).** A full messaging + sharing stack,
+  reachable from the Sub-GHz menu as "M1 Link":
+  - **Reliable transport:** framed packets (proto/ver, type, 16-bit src/dst
+    short IDs derived from the STM32 UID, seq), hardware CRC-16, and
+    stop-and-wait ARQ (per-fragment ACK, retry, backoff). Messages up to
+    240 bytes are fragmented and reassembled; each fragment is acknowledged.
+  - **Discovery:** HELLO beacons build a live nearby-peer list (name + RSSI),
+    so peers are found without typing hex IDs.
+  - **Encryption (optional):** AES-256-CBC over the whole message, keyed by a
+    shared passphrase (salted-MD5 KDF). Units with the wrong/no passphrase
+    silently drop traffic. Applies to messages and file transfers alike.
+  - **On-device Chat UI:** peer list → actions (Message / Ping / Locate /
+    Send File), conversation view, compose via the full keyboard, buzzer on
+    receive.
+  - **Ping / Locate:** ping reports round-trip time and the dBm at which the
+    peer heard you; locate makes a peer beep + flash its LED to find it.
+  - **Remote trigger:** send one of YOUR payloads to a paired peer and run it
+    there — sub-GHz `.sub` replay, **BadUSB** / **Bad-BT** DuckyScripts, or an
+    `.ir` file. The file is transferred into the payload's folder on the peer
+    (`0:/SUBGHZ`, `0:/BadUSB`, `0:/IR`) and executed when the transfer
+    completes. **Runs only when the transfer arrives encrypted** (shared
+    passphrase), and after the final ACK so it can't double-fire. Peer →
+    actions → Trigger → type → pick a file.
+  - **Capture sharing:** send a saved `.sub` / `.nfc` / `.ir` file to a peer
+    (chunked, ACKed, encrypted if a passphrase is set). Received files are
+    routed by extension into `0:/SUBGHZ`, `0:/NFC`, `0:/IR`.
+  - **Settings** (persisted to `0:/M1LINK.CFG`): callsign, passphrase,
+    channel, TX power.
+  - **Channels** (0–9) — each is its own absolute frequency 1 MHz apart
+    (915–924 MHz), far wider than the RX bandwidth, so channels are genuinely
+    isolated "rooms": same channel to talk, different channels can't hear each
+    other.
+  - **Listen-before-talk** collision avoidance before each transmit.
+  - CLI (debug console): `link info|beacon|listen|rxdiag|id|send|recv|scan|
+    ping|locate|sendfile|trigger|key|chan|name|save`.
+  - Design notes: `documentation/m1_link_design.md`; plan/tracker: `plan.md`.
+
+### Fixed
+- **Sub-GHz record could only capture once per boot.** The record view's destroy
+  handler never freed the capture ring buffers allocated by
+  `sub_ghz_ring_buffers_init()`, so they leaked on every record session; the
+  next record failed to `malloc` ("MEM_ERROR") until a reboot. The buffers are
+  now freed when the record view is destroyed. (Pre-existing bug, unrelated to
+  M1 Link.)
+
+### Changed
+- Version bumped to **0.3.0** for the M1 Link feature.
+
 ## [0.2.3] - 2026-08-11
 
 ### Added

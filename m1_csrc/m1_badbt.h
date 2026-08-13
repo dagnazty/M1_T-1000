@@ -32,4 +32,7 @@ typedef struct
 /* Menu entry point */
 void badbt_run(void);
 
+/* Execute a Bad-BT DuckyScript file (used by M1 Link remote trigger). */
+bool badbt_execute_file(const char *filepath);
+
 #endif /* M1_BADBT_H_ */

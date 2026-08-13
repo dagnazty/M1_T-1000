@@ -6,6 +6,21 @@
 
 > **This is an independent community project and is not affiliated with or endorsed by Monstatek.**
 
+## What's New in v0.3.0
+
+### Added
+- **M1 Link — device-to-device wireless between M1 units** over the Si4463
+  sub-GHz radio (915 MHz FSK). Reliable, acknowledged messaging with automatic
+  peer discovery; optional AES-256 encryption keyed by a shared passphrase; 10
+  genuinely-isolated channels; ping/locate; capture sharing (`.sub`/`.nfc`/`.ir`);
+  and remote trigger (replay a peer's sub-GHz, IR, BadUSB, or Bad-BT payload).
+  Found under **Sub-GHz → M1 Link** — see [M1 Link](#m1-link-device-to-device)
+  below.
+
+### Fixed
+- **Sub-GHz record now works repeatedly** — previously a capture-buffer leak let
+  you record only once per boot before a reboot was needed.
+
 ## Features
 
 ### Flipper Zero Compatibility
@@ -60,6 +75,28 @@
 - Pairs with target device wirelessly, no cable needed
 
 > **Note:** Bad-BT is under active development and may not work reliably on all target devices. Bluetooth pairing and keystroke delivery depend on the target's BLE HID support.
+
+### M1 Link (device-to-device)
+Wireless link between two (or more) M1 units over the Si4463 sub-GHz radio
+(915 MHz FSK) — no PC or phone in the middle. Found under **Sub-GHz → M1 Link**.
+- **Messaging** — reliable, acknowledged text between units, with automatic peer
+  discovery (a live nearby list of names + signal strength, so no typing IDs)
+- **Encryption** — optional AES-256 keyed by a shared passphrase; units without
+  the matching passphrase can't read the traffic (messages *and* file transfers)
+- **Channels** — 10 genuinely-isolated channels (each on its own frequency); put
+  a group on the same channel to talk, or a different channel for privacy
+- **Ping / Locate** — measure round-trip time and link quality to a peer, or make
+  a peer beep and flash its LED to physically find it
+- **Capture sharing** — send a saved `.sub` / `.nfc` / `.ir` file to a peer; it
+  lands in the right folder on their SD automatically
+- **Remote trigger** — send one of your payloads to a *paired* peer and run it
+  there: replay a sub-GHz `.sub`, transmit an `.ir` button, or fire a BadUSB /
+  Bad-BT script (only honored when encrypted, so it can't be abused)
+- Per-unit callsign and TX power, all saved to the SD card
+
+> **Note:** M1 Link is new and under active testing. Both units must be on the
+> same channel to communicate, and remote trigger requires the same passphrase
+> on both.
 
 ### External Apps
 - **ELF app loader** — load and run third-party apps from SD card

@@ -53,6 +53,9 @@ void ir_universal_run(void);
 
 /* Initialize/cleanup */
 void ir_universal_init(void);
+
+/* Transmit every signal in a saved .ir file (used by M1 Link remote trigger). */
+void ir_universal_play_file(const char *path);
 void ir_universal_deinit(void);
 
 /* Open a single .ir file in the scrolling button-list replay screen

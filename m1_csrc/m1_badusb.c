@@ -546,8 +546,13 @@ bool badusb_execute_file(const char *filepath)
     FIL fp;
     FRESULT fres;
     UINT bytes_read;
-    char script_buf[BADUSB_MAX_SCRIPT_SIZE];
-    char line_buf[BADUSB_MAX_LINE_LEN];
+    /* Static, not on-stack: this is ~4.3 KB and badusb is single-instance
+     * (guarded by the global badusb_state). Keeping it off the stack lets
+     * badusb_execute_file be safely called from deeper call chains such as
+     * the M1 Link remote-trigger path, where a 4 KB stack frame would overflow
+     * the caller's task stack and hang right after the Phase 1 breadcrumb. */
+    static char script_buf[BADUSB_MAX_SCRIPT_SIZE];
+    static char line_buf[BADUSB_MAX_LINE_LEN];
 
     /* Phase 1: File read */
     badusb_breadcrumb(1);

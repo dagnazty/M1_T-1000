@@ -1170,6 +1170,49 @@ static void transmit_command(const ir_universal_cmd_t *cmd)
 } // static void transmit_command(...)
 
 
+/*============================================================================*/
+/*
+ * Transmit every signal in a saved .ir file (one shot, no UI navigation).
+ * Used by M1 Link remote trigger. Reuses the module's parser + TX core.
+ */
+/*============================================================================*/
+void ir_universal_play_file(const char *path)
+{
+	uint16_t n, i;
+
+	if (path == NULL)
+		return;
+	/* transmit_raw_command() re-reads raw timings from s_raw_tx_filepath, so it
+	 * must point at the file we're playing (otherwise: "File read error"). */
+	strncpy(s_raw_tx_filepath, path, IR_UNIVERSAL_PATH_MAX_LEN - 1);
+	s_raw_tx_filepath[IR_UNIVERSAL_PATH_MAX_LEN - 1] = '\0';
+	n = parse_ir_file(path);
+	for (i = 0; i < n && i < IR_UNIVERSAL_MAX_CMDS; i++)
+	{
+		S_M1_Main_Q_t q;
+		TickType_t    t0 = xTaskGetTickCount();
+
+		transmit_command(&s_commands[i]);
+
+		/* transmit_command() kicks off an ISR-driven TX and returns; the ISR
+		 * posts Q_EVENT_IRRED_TX on completion. Wait for it with a BLOCKING
+		 * queue receive (yields to other tasks — a busy-spin here starves the
+		 * tick and wedges the device), with a safety timeout so a TX that never
+		 * completes can't hang us. Then tear the hardware down. */
+		while (ir_ota_data_tx_active &&
+		       (xTaskGetTickCount() - t0) < pdMS_TO_TICKS(3000))
+		{
+			if (xQueueReceive(main_q_hdl, &q, pdMS_TO_TICKS(50)) == pdTRUE &&
+			    q.q_evt_type == Q_EVENT_IRRED_TX)
+				break;   /* TX finished */
+		}
+		infrared_encode_sys_deinit();   /* forces carrier off + deinits timers */
+	}
+	/* Turn the TX activity LED back off (transmit_command turned it on). */
+	m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_OFF, LED_FASTBLINK_ONTIME_OFF);
+} // void ir_universal_play_file(...)
+
+
 
 /*============================================================================*/
 /*

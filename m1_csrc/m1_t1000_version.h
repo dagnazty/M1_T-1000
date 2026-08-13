@@ -6,8 +6,8 @@
 #include "m1_fw_update_bl.h"
 
 #define T1000_VERSION_MAJOR        0
-#define T1000_VERSION_MINOR        2
-#define T1000_VERSION_PATCH        3
+#define T1000_VERSION_MINOR        3
+#define T1000_VERSION_PATCH        0
 
 #define T1000_STR_HELPER(x)        #x
 #define T1000_STR(x)               T1000_STR_HELPER(x)

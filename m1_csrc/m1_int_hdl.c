@@ -523,6 +523,12 @@ void HAL_TIM_PeriodElapsedCallback_IR(TIM_HandleTypeDef *htim)
 			else
 			{
 				irsnd_off(); // Let turn off the Carrier
+				/* Stop the baseband timer immediately on completion. The last
+				 * step loaded ARR with buffer[len] (one past the samples), so if
+				 * we leave the timer running it keeps firing at that stale/short
+				 * period, starving the scheduler before the owning task can tear
+				 * down the TX. Disabling here makes completion self-contained. */
+				__HAL_TIM_DISABLE(&Timerhdl_IrTx);
 				ir_ota_data_tx_active = FALSE;
 				q_item.q_data.ir_tx_data = 1; // any value, not used
 				q_item.q_evt_type = Q_EVENT_IRRED_TX;

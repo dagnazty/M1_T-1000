@@ -105,6 +105,17 @@ struct si446x_reply_PART_INFO_map *SI446x_PartInfo(void);
 struct si446x_reply_REQUEST_DEVICE_STATE_map *SI446x_Request_DeviceState(void);
 struct si446x_reply_GET_MODEM_STATUS_map *SI446x_Get_ModemStatus( uint8_t MODEM_CLR_PEND);
 
+/* Packet (FIFO) mode helpers — used by the M1 Link device-to-device feature.
+ * These were already implemented in the driver but not previously exported. */
+uint8_t SI446x_ConfigInit(const uint8_t* pSetPropCmd);
+void SI446x_Start_Tx(uint8_t channel, uint8_t *pradio_tx_buffer, uint8_t length);
+void SI446x_Write_TxFiFo(uint8_t numBytes, uint8_t *pTxData);
+void SI446x_Read_RxFiFo(uint8_t numBytes, uint8_t *pRxData);
+void SI446x_FiFoInfo(uint8_t FIFO);
+void SI446x_Set_Property(uint8_t group, uint8_t start, uint8_t count, const uint8_t *data);
+uint8_t SI446x_Get_PH_Pend(void);
+uint8_t SI446x_Get_RxFifoCount(void);
+
 extern volatile uint8_t radio_state_flag;
 extern volatile uint8_t si446x_nIRQ_active;
 

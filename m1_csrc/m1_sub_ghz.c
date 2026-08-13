@@ -909,6 +909,11 @@ static void subghz_record_gui_create(uint8_t param)
 static void subghz_record_gui_destroy(uint8_t param)
 {
 	m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_OFF, LED_FASTBLINK_ONTIME_OFF); // Turn off
+	/* Free the capture ring buffers allocated by sub_ghz_ring_buffers_init().
+	 * Without this they leak on every record session, so the second record
+	 * fails to malloc ("MEM_ERROR") until a reboot. Null-guarded, so it is safe
+	 * even if teardown already happened on the save/exit path. */
+	sub_ghz_ring_buffers_deinit();
 } // static void subghz_record_gui_destroy(uint8_t param)
 
 

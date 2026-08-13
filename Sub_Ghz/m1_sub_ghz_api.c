@@ -810,6 +810,108 @@ void SI446x_Write_TxFiFo(uint8_t numBytes, uint8_t *pTxData)
 
 /******************************************************************************/
 /*
+ * Read received data out of the Rx FiFo.
+ * numBytes  Number of bytes to clock out of the FIFO.
+ * pRxData   Destination buffer (must hold at least numBytes).
+ *
+ * Mirrors SI446x_Write_TxFiFo(). The READ_RX_FIFO (0x77) command is a direct
+ * FIFO access: after CTS is ready, a single NSS assertion sends the command id
+ * then clocks the payload back. This is the RX counterpart the driver was
+ * missing (only the WRITE side existed).
+ */
+/******************************************************************************/
+void SI446x_Read_RxFiFo(uint8_t numBytes, uint8_t *pRxData)
+{
+    uint8_t cmd_id = SI446X_CMD_ID_READ_RX_FIFO;
+    uint16_t guard = SI4463_CTS_TIMEOUT;
+
+    if ( numBytes==0 || pRxData==NULL )
+        return;
+    if ( numBytes > RF_PACKET_LEN_MAX )
+        numBytes = RF_PACKET_LEN_MAX;
+
+    /* Wait for the radio to be ready before touching the FIFO */
+    while ( !si446x_CTS_ready && guard-- )
+    {
+        if ( SI446x_Get_Resp(0, NULL)==SI4463_CTS_READY )
+            break;
+    }
+
+    /* Single NSS assertion: write the READ_RX_FIFO opcode, then read payload */
+    radio_spi_trans_inf.trans_type = SPI_TRANS_ASSERT_NSS;
+    m1_spi_hal_trans_req(&radio_spi_trans_inf);
+
+    radio_spi_trans_inf.pdata_tx = &cmd_id;
+    radio_spi_trans_inf.data_len = 1;
+    radio_spi_trans_inf.trans_type = SPI_TRANS_WRITE_DATA_NO_NSS;
+    m1_spi_hal_trans_req(&radio_spi_trans_inf);
+
+    radio_spi_trans_inf.pdata_rx = pRxData;
+    radio_spi_trans_inf.data_len = numBytes;
+    radio_spi_trans_inf.trans_type = SPI_TRANS_READ_DATA_NO_NSS;
+    m1_spi_hal_trans_req(&radio_spi_trans_inf);
+
+    radio_spi_trans_inf.trans_type = SPI_TRANS_DEASSERT_NSS;
+    m1_spi_hal_trans_req(&radio_spi_trans_inf);
+} // void SI446x_Read_RxFiFo(uint8_t numBytes, uint8_t *pRxData)
+
+
+
+/******************************************************************************/
+/*
+ * Generic SET_PROPERTY helper — write `count` consecutive property bytes to a
+ * property group starting at `start`. Used by M1 Link to fix up the packet
+ * handler (preamble / sync / field lengths) after loading a raw-mode config.
+ */
+/******************************************************************************/
+void SI446x_Set_Property(uint8_t group, uint8_t start, uint8_t count, const uint8_t *data)
+{
+    uint8_t buf[4 + 12];
+    uint8_t i;
+
+    if ( count > 12 )
+        count = 12;
+    buf[0] = SI446X_CMD_ID_SET_PROPERTY;
+    buf[1] = group;
+    buf[2] = count;
+    buf[3] = start;
+    for ( i = 0; i < count; i++ )
+        buf[4 + i] = data[i];
+
+    SI446x_Send_Cmd(4 + count, buf);
+} // void SI446x_Set_Property(...)
+
+
+
+/******************************************************************************/
+/*
+ * Return the Packet-Handler pending flags captured by the most recent
+ * SI446x_Get_IntStatus() call (PACKET_SENT / PACKET_RX / CRC_ERROR live here).
+ * Keeps the internal reply union private to this driver.
+ */
+/******************************************************************************/
+uint8_t SI446x_Get_PH_Pend(void)
+{
+    return si446x_cmd.GET_INT_STATUS.PH_PEND;
+} // uint8_t SI446x_Get_PH_Pend(void)
+
+
+
+/******************************************************************************/
+/*
+ * Read how many bytes are currently sitting in the Rx FIFO (no reset).
+ */
+/******************************************************************************/
+uint8_t SI446x_Get_RxFifoCount(void)
+{
+    SI446x_FiFoInfo(0x00); /* read counts only, do not reset either FIFO */
+    return si446x_cmd.FIFO_INFO.RX_FIFO_COUNT;
+} // uint8_t SI446x_Get_RxFifoCount(void)
+
+
+
+/******************************************************************************/
+/*
  * Selects the type of modulation. In TX mode, additionally selects the source of the modulation.
  * NEW_MOD_TYPE:  TX_DIRECT_MODE_TYPE	TX_DIRECT_MODE_GPIO	MOD_SOURCE	MOD_TYPE
  */

@@ -543,13 +543,17 @@ static bool badbt_wait_for_connection(void)
   * @retval true on success, false on error/abort
   */
 /*============================================================================*/
-static bool badbt_execute_file(const char *filepath)
+bool badbt_execute_file(const char *filepath)
 {
     FIL fp;
     FRESULT fres;
     UINT bytes_read;
-    char script_buf[BADBT_MAX_SCRIPT_SIZE];
-    char line_buf[BADBT_MAX_LINE_LEN];
+    /* Static, not on-stack (~4.3 KB): Bad-BT is single-instance, and keeping
+     * this off the stack lets badbt_execute_file be called safely from the
+     * deep M1 Link remote-trigger call chain without overflowing the task
+     * stack (which otherwise hangs it right after the Phase 1 breadcrumb). */
+    static char script_buf[BADBT_MAX_SCRIPT_SIZE];
+    static char line_buf[BADBT_MAX_LINE_LEN];
 
     /* Read script file */
     fres = f_open(&fp, filepath, FA_READ);
