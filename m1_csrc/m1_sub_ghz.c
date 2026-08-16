@@ -387,6 +387,7 @@ typedef enum {
 typedef enum {
 	SUBGHZ_REPLAY_DISPLAY_PARAM_ACTIVE = 0,
 	SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY,
+	SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING,
 	SUBGHZ_REPLAY_DISPLAY_PARAM_SYS_ERROR
 } S_M1_SubGHz_Replay_Display_Param_t;
 
@@ -422,6 +423,7 @@ static uint8_t subghz_replay_ret_code;
 static uint8_t subghz_replay_mod;
 static uint8_t subghz_replay_band, subghz_replay_channel;
 static float subghz_replay_freq;
+static bool subghz_tx_repeat_mode = false;
 static S_M1_file_info *f_info = NULL;
 static S_M1_SDM_DatFileInfo_t datfile_info;
 S_M1_Q_Union_t *subghz_rx_q = NULL;
@@ -489,6 +491,7 @@ static uint8_t sub_ghz_raw_replay_init(void);
 static void sub_ghz_raw_tx_stop(void);
 static uint8_t sub_ghz_replay_start(bool record_mode, S_M1_SubGHz_Band band, uint8_t channel, uint8_t power);
 static uint8_t sub_ghz_replay_continue(uint8_t ret_code_in);
+static bool sub_ghz_replay_tx_burst_start(void);
 static uint8_t sub_ghz_fcc_ism_band_check(uint8_t band, uint8_t channel);
 static void sub_ghz_buffer_rotate(S_M1_RingBuffer *prb_handle);
 static uint8_t sub_ghz_parse_raw_data(uint8_t buffer_ptr_id);
@@ -1629,7 +1632,7 @@ static void subghz_replay_browse_gui_update(uint8_t param)
 		{
 			double_buffer_ptr_id = 1; // Update raw samples buffer
 			m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_M, LED_FASTBLINK_ONTIME_M); // Turn on
-			m1_uiView_display_update(SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY);
+			m1_uiView_display_update(SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING);
 		} // if ( ret_code )
 		else
 		{
@@ -1704,6 +1707,28 @@ static void subghz_replay_play_gui_init(void)
 
 /*============================================================================*/
 /**
+  * @brief  Start one TX burst of the currently loaded signal.
+  *         Updates subghz_replay_ret_code. Caller handles LED and error UI.
+  * @param  None
+  * @retval true if the transmission started
+  */
+/*============================================================================*/
+static bool sub_ghz_replay_tx_burst_start(void)
+{
+	sub_ghz_set_opmode(SUB_GHZ_OPMODE_TX, subghz_replay_band, subghz_replay_channel,
+	                   tx_power_values[subghz_tx_power_idx]);
+	subghz_replay_ret_code = sub_ghz_raw_replay_init();
+	if ( subghz_replay_ret_code==1 )
+		return false;
+
+	double_buffer_ptr_id = 1;
+	subghz_decenc_ctl.ntx_raw_repeat = SUBGHZ_TX_RAW_REPLAY_REPEAT_DEFAULT;
+	return true;
+} // static bool sub_ghz_replay_tx_burst_start(void)
+
+
+/*============================================================================*/
+/**
   * @brief
   * @param
   * @retval
@@ -1757,8 +1782,17 @@ static void subghz_replay_play_gui_update(uint8_t param)
 			strcat(freq_text, "MHz ");
 			strcat(freq_text, subghz_modulation_text[subghz_replay_mod]);
 			strcpy(line1, freq_text);
-			strcpy(line2, "Replay ready");
-			strcpy(line3, "OK transmit  BACK return");
+			strcpy(line2, subghz_tx_repeat_mode ? "Mode: Repeat" : "Mode: Once");
+			strcpy(line3, "OK send  L/R mode");
+			break;
+
+		case SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING:
+			m1_float_to_string(freq_text, subghz_replay_freq, 3);
+			strcat(freq_text, "MHz ");
+			strcat(freq_text, subghz_modulation_text[subghz_replay_mod]);
+			strcpy(line1, freq_text);
+			strcpy(line2, subghz_tx_repeat_mode ? "Sending (repeat)" : "Sending...");
+			strcpy(line3, "BACK to stop");
 			break;
 
 		case SUBGHZ_REPLAY_DISPLAY_PARAM_SYS_ERROR:
@@ -1778,7 +1812,11 @@ static void subghz_replay_play_gui_update(uint8_t param)
 					  line3[0] ? line3 : NULL);
 	if (param == SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY)
 	{
-		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Replay", target_10x10);
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Send", target_10x10);
+	}
+	else if (param == SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING)
+	{
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Stop", "", NULL);
 	}
 	else
 	{
@@ -1816,7 +1854,13 @@ static int subghz_replay_play_gui_message(void)
 			subghz_replay_ret_code = sub_ghz_replay_continue(subghz_replay_ret_code);
 			if ( subghz_replay_ret_code==SUB_GHZ_RAW_DATA_PARSER_IDLE )
 			{
-				m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_OFF, LED_FASTBLINK_ONTIME_OFF); // Turn off
+				// Signal fully sent: loop again in Repeat mode, otherwise return to idle
+				if ( !subghz_tx_repeat_mode || !sub_ghz_replay_tx_burst_start() )
+				{
+					subghz_replay_ret_code = SUB_GHZ_RAW_DATA_PARSER_IDLE;
+					m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_OFF, LED_FASTBLINK_ONTIME_OFF); // Turn off
+					m1_uiView_display_update(SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY);
+				} // if ( !subghz_tx_repeat_mode || !sub_ghz_replay_tx_burst_start() )
 			} // if ( subghz_replay_ret_code==SUB_GHZ_RAW_DATA_PARSER_IDLE )
 		} // else if ( q_item.q_evt_type==Q_EVENT_SUBGHZ_TX )
 	} // if (ret==pdTRUE)
@@ -1856,14 +1900,11 @@ static int subghz_replay_play_kp_handler(void)
 			{
 				if ( subghz_replay_ret_code != SUB_GHZ_RAW_DATA_PARSER_IDLE ) // Do nothing if it's replaying
 					return 1;
-				sub_ghz_set_opmode(SUB_GHZ_OPMODE_TX, subghz_replay_band, subghz_replay_channel, tx_power_values[subghz_tx_power_idx]);
-				subghz_replay_ret_code = sub_ghz_raw_replay_init();
-				if ( subghz_replay_ret_code!=1 )
+				if ( sub_ghz_replay_tx_burst_start() )
 				{
-					double_buffer_ptr_id = 1;
-					subghz_decenc_ctl.ntx_raw_repeat = SUBGHZ_TX_RAW_REPLAY_REPEAT_DEFAULT;
 					m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_M, LED_FASTBLINK_ONTIME_M); // Turn on
-				} // if ( ret_code!=1 )
+					m1_uiView_display_update(SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING);
+				} // if ( sub_ghz_replay_tx_burst_start() )
 				else
 				{
 					sub_ghz_raw_tx_stop();
@@ -1874,6 +1915,12 @@ static int subghz_replay_play_kp_handler(void)
 				} // else
 			} // if ( subghz_uiview_gui_latest_param==SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY )
 		} // else if(this_button_status.event[BUTTON_OK_KP_ID]==BUTTON_EVENT_CLICK )
+		else if( this_button_status.event[BUTTON_LEFT_KP_ID]==BUTTON_EVENT_CLICK ||
+		         this_button_status.event[BUTTON_RIGHT_KP_ID]==BUTTON_EVENT_CLICK )	// Once <-> Repeat
+		{
+			subghz_tx_repeat_mode = !subghz_tx_repeat_mode;
+			m1_uiView_display_update(subghz_uiview_gui_latest_param);
+		} // else if( LEFT or RIGHT click )
 	} // if (ret==pdTRUE)
 
 	return 1;
@@ -2428,7 +2475,7 @@ uint8_t sub_ghz_replay_flipper_file(const char *sub_path)
 		double_buffer_ptr_id = 1;
 		m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_M,
 		                  LED_FASTBLINK_ONTIME_M);
-		subghz_replay_play_gui_update(SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY);
+		subghz_replay_play_gui_update(SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING);
 	}
 	else
 	{
@@ -2473,19 +2520,13 @@ uint8_t sub_ghz_replay_flipper_file(const char *sub_path)
 					/* Replay again */
 					if (subghz_replay_ret_code == SUB_GHZ_RAW_DATA_PARSER_IDLE)
 					{
-						sub_ghz_set_opmode(SUB_GHZ_OPMODE_TX,
-						                   subghz_replay_band,
-						                   subghz_replay_channel,
-						                   tx_power_values[subghz_tx_power_idx]);
-						subghz_replay_ret_code = sub_ghz_raw_replay_init();
-						if (subghz_replay_ret_code != 1)
+						if (sub_ghz_replay_tx_burst_start())
 						{
-							double_buffer_ptr_id = 1;
-							subghz_decenc_ctl.ntx_raw_repeat =
-							    SUBGHZ_TX_RAW_REPLAY_REPEAT_DEFAULT;
 							m1_led_fast_blink(LED_BLINK_ON_RGB,
 							                  LED_FASTBLINK_PWM_M,
 							                  LED_FASTBLINK_ONTIME_M);
+							subghz_replay_play_gui_update(
+							    SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING);
 						}
 						else
 						{
@@ -2498,6 +2539,14 @@ uint8_t sub_ghz_replay_flipper_file(const char *sub_path)
 						}
 					}
 				}
+				else if (btn.event[BUTTON_LEFT_KP_ID] == BUTTON_EVENT_CLICK ||
+				         btn.event[BUTTON_RIGHT_KP_ID] == BUTTON_EVENT_CLICK)
+				{
+					/* Toggle Once <-> Repeat; takes effect on the next
+					 * end-of-signal, so it can also stop an ongoing loop */
+					subghz_tx_repeat_mode = !subghz_tx_repeat_mode;
+					subghz_replay_play_gui_update(subghz_uiview_gui_latest_param);
+				}
 			}
 			else if (q_item.q_evt_type == Q_EVENT_SUBGHZ_TX)
 			{
@@ -2506,25 +2555,15 @@ uint8_t sub_ghz_replay_flipper_file(const char *sub_path)
 				    sub_ghz_replay_continue(subghz_replay_ret_code);
 				if (subghz_replay_ret_code == SUB_GHZ_RAW_DATA_PARSER_IDLE)
 				{
-					/* Auto-restart: loop continuously until BACK */
-					sub_ghz_set_opmode(SUB_GHZ_OPMODE_TX,
-					                   subghz_replay_band,
-					                   subghz_replay_channel,
-					                   tx_power_values[subghz_tx_power_idx]);
-					subghz_replay_ret_code = sub_ghz_raw_replay_init();
-					if (subghz_replay_ret_code != 1)
+					/* Repeat mode: loop until BACK. Once mode: stop here. */
+					if (!subghz_tx_repeat_mode || !sub_ghz_replay_tx_burst_start())
 					{
-						double_buffer_ptr_id = 1;
-						subghz_decenc_ctl.ntx_raw_repeat =
-						    SUBGHZ_TX_RAW_REPLAY_REPEAT_DEFAULT;
-					}
-					else
-					{
-						/* Restart failed — stop */
+						subghz_replay_ret_code = SUB_GHZ_RAW_DATA_PARSER_IDLE;
 						m1_led_fast_blink(LED_BLINK_ON_RGB,
 						                  LED_FASTBLINK_PWM_OFF,
 						                  LED_FASTBLINK_ONTIME_OFF);
-						subghz_replay_ret_code = SUB_GHZ_RAW_DATA_PARSER_IDLE;
+						subghz_replay_play_gui_update(
+						    SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY);
 					}
 				}
 			}
@@ -2990,7 +3029,7 @@ static void sub_ghz_saved_action_menu(const char *filepath, const char *filename
 						{
 							double_buffer_ptr_id = 1;
 							m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_M, LED_FASTBLINK_ONTIME_M);
-							subghz_replay_play_gui_update(SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY);
+							subghz_replay_play_gui_update(SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING);
 						}
 						else
 						{
@@ -3023,15 +3062,10 @@ static void sub_ghz_saved_action_menu(const char *filepath, const char *filename
 									{
 										if (subghz_replay_ret_code == SUB_GHZ_RAW_DATA_PARSER_IDLE)
 										{
-											sub_ghz_set_opmode(SUB_GHZ_OPMODE_TX,
-											    subghz_replay_band, subghz_replay_channel,
-											    tx_power_values[subghz_tx_power_idx]);
-											subghz_replay_ret_code = sub_ghz_raw_replay_init();
-											if (subghz_replay_ret_code != 1)
+											if (sub_ghz_replay_tx_burst_start())
 											{
-												double_buffer_ptr_id = 1;
-												subghz_decenc_ctl.ntx_raw_repeat = SUBGHZ_TX_RAW_REPLAY_REPEAT_DEFAULT;
 												m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_M, LED_FASTBLINK_ONTIME_M);
+												subghz_replay_play_gui_update(SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING);
 											}
 											else
 											{
@@ -3042,26 +3076,25 @@ static void sub_ghz_saved_action_menu(const char *filepath, const char *filename
 											}
 										}
 									}
+									else if (btn.event[BUTTON_LEFT_KP_ID] == BUTTON_EVENT_CLICK ||
+									         btn.event[BUTTON_RIGHT_KP_ID] == BUTTON_EVENT_CLICK)
+									{
+										/* Toggle Once <-> Repeat */
+										subghz_tx_repeat_mode = !subghz_tx_repeat_mode;
+										subghz_replay_play_gui_update(subghz_uiview_gui_latest_param);
+									}
 								}
 								else if (q_item.q_evt_type == Q_EVENT_SUBGHZ_TX)
 								{
 									subghz_replay_ret_code = sub_ghz_replay_continue(subghz_replay_ret_code);
 									if (subghz_replay_ret_code == SUB_GHZ_RAW_DATA_PARSER_IDLE)
 									{
-										/* Auto-restart: loop until BACK */
-										sub_ghz_set_opmode(SUB_GHZ_OPMODE_TX,
-										    subghz_replay_band, subghz_replay_channel,
-										    tx_power_values[subghz_tx_power_idx]);
-										subghz_replay_ret_code = sub_ghz_raw_replay_init();
-										if (subghz_replay_ret_code != 1)
+										/* Repeat mode: loop until BACK. Once mode: stop here. */
+										if (!subghz_tx_repeat_mode || !sub_ghz_replay_tx_burst_start())
 										{
-											double_buffer_ptr_id = 1;
-											subghz_decenc_ctl.ntx_raw_repeat = SUBGHZ_TX_RAW_REPLAY_REPEAT_DEFAULT;
-										}
-										else
-										{
-											m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_OFF, LED_FASTBLINK_ONTIME_OFF);
 											subghz_replay_ret_code = SUB_GHZ_RAW_DATA_PARSER_IDLE;
+											m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_OFF, LED_FASTBLINK_ONTIME_OFF);
+											subghz_replay_play_gui_update(SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY);
 										}
 									}
 								}
