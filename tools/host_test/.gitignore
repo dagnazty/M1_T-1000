@@ -1,5 +1,6 @@
 # Compiled host-test binaries and objects — never committed.
 test_flipper_ir
+test_subghz_rssi
 validate_ir
 *.o
 *.ir

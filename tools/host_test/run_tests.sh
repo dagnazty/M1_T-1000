@@ -27,4 +27,14 @@ SCRATCH="$(mktemp -d)"
 ( cd "$SCRATCH" && "$BIN" )
 rc=$?
 rm -rf "$SCRATCH"
-exit $rc
+[ $rc -eq 0 ] || exit $rc
+
+# SubGHz live-RSSI-bar geometry helpers (Task 1). Pure math, header-free
+# snippet shared with m1_csrc/m1_sub_ghz.c — no firmware sources needed.
+SUBGHZ_BIN="$DIR/test_subghz_rssi"
+"$CC" -std=c11 -Wall -Wextra -O0 -g \
+	-I"$ROOT/m1_csrc" \
+	"$DIR/test_subghz_rssi.c" \
+	-o "$SUBGHZ_BIN"
+"$SUBGHZ_BIN"
+exit $?

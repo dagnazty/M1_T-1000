@@ -43,6 +43,16 @@
 #define NOISE_FLOOR_RSSI_THRESHOLD		-110 //dBm
 #define SIGNAL_TO_NOISE_RATIO			20 //dB
 
+// Pure geometry helpers for the live RSSI level bar (host-tested in
+// tools/host_test/test_subghz_rssi.c). Header-free snippet, single source of
+// truth shared with the host test — no new translation unit / CMake change.
+#include "m1_sub_ghz_rssi_bar.inc"
+
+// Live RSSI bar refresh cadence (ms). The record message loop wakes on this
+// timeout to sample CURR_RSSI during silence; the raw-sample flush/decode path
+// is never delayed. ~10 Hz vs a ~100us radio read.
+#define SUBGHZ_RSSI_BAR_REFRESH_MS		100
+
 #define CHANNEL_STEPS_MAX				256
 #define CHANNEL_STEP					(float)0.25 // MHz
 
@@ -331,6 +341,14 @@ static uint32_t subghz_custom_freq_hz = 433920000UL;
 static SubGHz_Dec_Info_t subghz_record_last_decoded;
 static bool subghz_record_has_decoded = false;
 
+/* Last RSSI (dBm) shown by the live level bar on the record view. Fed from the
+ * decoded RSSI here (Task 2); a timed sampler updates it during silence later. */
+static int16_t subghz_record_last_rssi_dbm = SUBGHZ_RSSI_BAR_MIN_DBM;
+
+/* True while the READY pre-scan holds the radio in RX (listening, no SD writer)
+ * so the live bar tracks RF before a recording is armed (Task 4). */
+static bool subghz_prescan_rx_active = false;
+
 //************************** S T R U C T U R E S *******************************
 
 typedef enum {
@@ -369,6 +387,7 @@ typedef enum {
 typedef enum {
 	SUBGHZ_REPLAY_DISPLAY_PARAM_ACTIVE = 0,
 	SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY,
+	SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING,
 	SUBGHZ_REPLAY_DISPLAY_PARAM_SYS_ERROR
 } S_M1_SubGHz_Replay_Display_Param_t;
 
@@ -404,6 +423,7 @@ static uint8_t subghz_replay_ret_code;
 static uint8_t subghz_replay_mod;
 static uint8_t subghz_replay_band, subghz_replay_channel;
 static float subghz_replay_freq;
+static bool subghz_tx_repeat_mode = false;
 static S_M1_file_info *f_info = NULL;
 static S_M1_SDM_DatFileInfo_t datfile_info;
 S_M1_Q_Union_t *subghz_rx_q = NULL;
@@ -471,12 +491,17 @@ static uint8_t sub_ghz_raw_replay_init(void);
 static void sub_ghz_raw_tx_stop(void);
 static uint8_t sub_ghz_replay_start(bool record_mode, S_M1_SubGHz_Band band, uint8_t channel, uint8_t power);
 static uint8_t sub_ghz_replay_continue(uint8_t ret_code_in);
+static bool sub_ghz_replay_tx_burst_start(void);
 static uint8_t sub_ghz_fcc_ism_band_check(uint8_t band, uint8_t channel);
 static void sub_ghz_buffer_rotate(S_M1_RingBuffer *prb_handle);
 static uint8_t sub_ghz_parse_raw_data(uint8_t buffer_ptr_id);
 static uint8_t sub_ghz_file_load(void);
 
 static bool sub_ghz_custom_freq_entry(void);
+
+static int16_t subghz_sample_rssi_dbm(void);
+static void subghz_prescan_rx_apply(void);
+static void subghz_prescan_rx_stop(void);
 
 /* Flipper-matching feature functions */
 void sub_ghz_read(void);
@@ -919,6 +944,36 @@ static void subghz_record_gui_destroy(uint8_t param)
 
 /*============================================================================*/
 /**
+  * @brief  Draw the live RSSI level bar with a static noise-floor threshold mark.
+  * @param  u8g2  Display handle (draw only on the SubGHz task, never from ISR).
+  * @param  x,y   Top-left of the bar frame.
+  * @param  w,h   Outer bar size in pixels (inner fill area is w-2 by h-2).
+  * @param  dbm   Current RSSI in dBm; mapped to fill via subghz_rssi_to_bar().
+  * @retval None
+  */
+/*============================================================================*/
+static void subghz_draw_rssi_bar(u8g2_t *u8g2, uint8_t x, uint8_t y,
+                                 uint8_t w, uint8_t h, int16_t dbm)
+{
+	uint8_t inner_w = (w > 2) ? (uint8_t)(w - 2) : 0;
+	uint8_t inner_h = (h > 2) ? (uint8_t)(h - 2) : 0;
+	uint8_t fill    = subghz_rssi_to_bar(dbm, inner_w);
+	uint8_t mark    = subghz_rssi_threshold_px(inner_w);
+
+	u8g2_SetDrawColor(u8g2, M1_DISP_DRAW_COLOR_TXT);
+	u8g2_DrawFrame(u8g2, x, y, w, h);
+	if (fill > 0 && inner_h > 0)
+		u8g2_DrawBox(u8g2, x + 1, y + 1, fill, inner_h);
+
+	/* Static threshold mark: short ticks above and below the bar at the
+	 * detection-threshold column, so it stays visible over the fill. */
+	u8g2_DrawVLine(u8g2, x + 1 + mark, (y >= 2) ? (y - 2) : 0, 2);
+	u8g2_DrawVLine(u8g2, x + 1 + mark, y + h, 2);
+} /* static void subghz_draw_rssi_bar(...) */
+
+
+/*============================================================================*/
+/**
   * @brief
   * @param
   * @retval
@@ -940,29 +995,28 @@ static void subghz_record_gui_update(uint8_t param)
 			         subghz_freq_presets[subghz_cfg.freq_idx].label,
 			         subghz_mod_presets[subghz_cfg.mod_idx].label);
 			strcpy(line1, cfg_line);
-			strcpy(line2, "OK record  DOWN config");
-			strcpy(line3, "LEFT/RIGHT band  UP custom");
+			strcpy(line2, "OK rec  DOWN cfg  UP custom");
+			/* line3 left empty: the live pre-scan RSSI bar occupies that row */
 			break;
 		}
 
 		case SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE:
 		{
-			/* Show decoded protocol info if available */
+			/* Show decoded protocol info if available. The RSSI bar occupies the
+			 * third row, so key/bits and TE share line2 and the live dBm is shown
+			 * on the bar readout (protocol/key/bits/dBm/TE all stay visible). */
 			if (subghz_record_has_decoded)
 			{
 				strncpy(line1, protocol_text[subghz_record_last_decoded.protocol], sizeof(line1) - 1);
-				snprintf(line2, sizeof(line2), "0x%lX %dbit",
+				snprintf(line2, sizeof(line2), "0x%lX %dbit TE:%d",
 				         (uint32_t)subghz_record_last_decoded.key,
-				         subghz_record_last_decoded.bit_len);
-				snprintf(line3, sizeof(line3), "%ddBm TE:%d",
-				         subghz_record_last_decoded.rssi,
+				         subghz_record_last_decoded.bit_len,
 				         subghz_record_last_decoded.te);
 			}
 			else
 			{
 				strcpy(line1, "Recording...");
 				strcpy(line2, "Waiting for signal");
-				strcpy(line3, "BACK or OK stops");
 			}
 			break;
 		}
@@ -1006,12 +1060,47 @@ static void subghz_record_gui_update(uint8_t param)
 			break;
 	} // switch (param)
 
+	/* One-shot on entering READY from another state: start the pre-scan RX so
+	 * the live bar tracks RF. Re-entries from the 10 Hz sampler keep the same
+	 * param and skip this (RX assert is heavy; never run it on the redraw path). */
+	if (param == SUBGHZ_RECORD_DISPLAY_PARAM_READY
+	    && subghz_uiview_gui_latest_param != SUBGHZ_RECORD_DISPLAY_PARAM_READY)
+	{
+		subghz_apply_config(); /* band/mod from the displayed presets */
+		subghz_prescan_rx_apply();
+	}
+
 	m1_u8g2_firstpage();
-	m1_draw_status_panel(&m1_u8g2, "Sub-GHz", "Record",
-					  subghz_antenna_50x27, 50, 27,
-					  line1[0] ? line1 : NULL,
-					  line2[0] ? line2 : NULL,
-					  line3[0] ? line3 : NULL);
+	if (param == SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE
+	    || param == SUBGHZ_RECORD_DISPLAY_PARAM_READY)
+	{
+		/* READY (pre-scan) and ACTIVE (recording) drop the antenna icon to make
+		 * room for a full-width live RSSI bar across the bottom of the content
+		 * frame, with a numeric dBm readout right-aligned on the top text row. */
+		char dbm_txt[12];
+
+		m1_draw_status_panel(&m1_u8g2, "Sub-GHz", "Record",
+						  NULL, 0, 0,
+						  line1[0] ? line1 : NULL,
+						  line2[0] ? line2 : NULL,
+						  NULL);
+
+		snprintf(dbm_txt, sizeof(dbm_txt), "%ddBm", subghz_record_last_rssi_dbm);
+		u8g2_SetFont(&m1_u8g2, M1_DISP_FUNC_MENU_FONT_N);
+		m1_draw_text(&m1_u8g2, 62, 25, 60, dbm_txt, TEXT_ALIGN_RIGHT);
+
+		/* Bar frame: x=6, y=39, full inner width (SUBGHZ_RSSI_BAR_FILL_W+2). */
+		subghz_draw_rssi_bar(&m1_u8g2, 6, 39, SUBGHZ_RSSI_BAR_FILL_W + 2, 8,
+		                     subghz_record_last_rssi_dbm);
+	}
+	else
+	{
+		m1_draw_status_panel(&m1_u8g2, "Sub-GHz", "Record",
+						  subghz_antenna_50x27, 50, 27,
+						  line1[0] ? line1 : NULL,
+						  line2[0] ? line2 : NULL,
+						  line3[0] ? line3 : NULL);
+	}
 	if (param == SUBGHZ_RECORD_DISPLAY_PARAM_READY)
 	{
 		m1_draw_bottom_bar(&m1_u8g2, arrowdown_8x8, "Config", "Record", target_10x10);
@@ -1040,6 +1129,57 @@ static void subghz_record_gui_update(uint8_t param)
 
 /*============================================================================*/
 /**
+  * @brief  Sample the current RSSI once (dBm) on the SubGHz task.
+  * @retval RF input level in dBm (RSSI_value/2 - MODEM_RSSI_COMP - 70).
+  * @note   ~100us SPI read; call only from the SubGHz task, never from an ISR.
+  */
+/*============================================================================*/
+static int16_t subghz_sample_rssi_dbm(void)
+{
+	struct si446x_reply_GET_MODEM_STATUS_map *pmodemstat;
+
+	SI446x_Get_IntStatus(0, 0, 0);           // read/clear pending INTs
+	pmodemstat = SI446x_Get_ModemStatus(0x00);
+	return (int16_t)(pmodemstat->CURR_RSSI / 2 - MODEM_RSSI_COMP - 70);
+} /* static int16_t subghz_sample_rssi_dbm(void) */
+
+
+/*============================================================================*/
+/**
+  * @brief  Put the radio in RX for the READY pre-scan (listening only, no SD
+  *         writer / no raw-capture ISR) so the live bar tracks the selected
+  *         frequency. Callers set the band via subghz_apply_config() (presets)
+  *         or subghz_scan_config directly (custom) first. Idempotent and cheap
+  *         enough for user keypresses — never call it on the 10 Hz redraw path.
+  * @retval None
+  */
+/*============================================================================*/
+static void subghz_prescan_rx_apply(void)
+{
+	sub_ghz_set_opmode(SUB_GHZ_OPMODE_RX, subghz_scan_config.band, 0, 0);
+	subghz_record_last_rssi_dbm = SUBGHZ_RSSI_BAR_MIN_DBM; /* start at the floor */
+	subghz_prescan_rx_active = true;
+} /* static void subghz_prescan_rx_apply(void) */
+
+
+/*============================================================================*/
+/**
+  * @brief  Tear the READY pre-scan RX down and isolate the radio.
+  * @retval None
+  */
+/*============================================================================*/
+static void subghz_prescan_rx_stop(void)
+{
+	if (subghz_prescan_rx_active)
+	{
+		sub_ghz_set_opmode(SUB_GHZ_OPMODE_ISOLATED, subghz_scan_config.band, 0, 0);
+		subghz_prescan_rx_active = false;
+	}
+} /* static void subghz_prescan_rx_stop(void) */
+
+
+/*============================================================================*/
+/**
   * @brief
   * @param
   * @retval
@@ -1052,7 +1192,28 @@ static int subghz_record_gui_message(void)
 	uint8_t ret_val = 1;
 	uint32_t rcv_samples;
 
-	ret = xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY);
+	/* Finite timeout so the loop wakes periodically to refresh the live RSSI
+	 * bar during silence. A queue event still preempts the wait immediately, so
+	 * the raw-sample flush/decode path below is unaffected. */
+	ret = xQueueReceive(main_q_hdl, &q_item, pdMS_TO_TICKS(SUBGHZ_RSSI_BAR_REFRESH_MS));
+	if (ret!=pdTRUE)
+	{
+		/* Timed wake with no queue event: sample live RSSI and redraw the bar.
+		 *  - READY pre-scan: radio is listening in RX (no SD writer).
+		 *  - ACTIVE recording, pre-decode: track RF during silence. Once a
+		 *    protocol is decoded the readout stays frozen at the decoded RSSI
+		 *    (unchanged decoded-info display).
+		 * Sampling/drawing happens on this task only, never from an ISR. */
+		if ( ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_READY
+		       && subghz_prescan_rx_active )
+		  || ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE
+		       && !subghz_record_has_decoded ) )
+		{
+			subghz_record_last_rssi_dbm = subghz_sample_rssi_dbm();
+			m1_uiView_display_update(subghz_uiview_gui_latest_param);
+		}
+		return ret_val;
+	}
 	if (ret==pdTRUE)
 	{
 		if ( q_item.q_evt_type==Q_EVENT_KEYPAD )
@@ -1082,6 +1243,7 @@ static int subghz_record_gui_message(void)
 				if (subghz_decenc_read(&dec, false) && dec.key != 0)
 				{
 					subghz_record_last_decoded = dec;
+					subghz_record_last_rssi_dbm = dec.rssi; /* feed the live bar */
 					subghz_record_has_decoded = true;
 					m1_buzzer_notification();
 					/* Only refresh display when protocol is actually decoded */
@@ -1160,6 +1322,7 @@ static int subghz_record_kp_handler(void)
 			} // else if ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_PLAY )
 			else
 			{
+				subghz_prescan_rx_stop(); /* isolate the pre-scan RX before leaving */
 				m1_uiView_display_switch(VIEW_MODE_IDLE, 0);
 				; // Do extra tasks here if needed
 				sub_ghz_rx_deinit();
@@ -1186,6 +1349,8 @@ static int subghz_record_kp_handler(void)
 				{
 					last_data_saved = false;
 					subghz_record_has_decoded = false;
+					subghz_record_last_rssi_dbm = SUBGHZ_RSSI_BAR_MIN_DBM; /* bar starts empty */
+					subghz_prescan_rx_active = false; /* recording now owns the radio (handoff) */
 					subghz_record_total_samples = 0;
 					m1_sdm_task_init();
 					m1_sdm_task_start();
@@ -1271,6 +1436,7 @@ static int subghz_record_kp_handler(void)
 				subghz_cfg.freq_idx = (subghz_cfg.freq_idx > 0) ?
 				    subghz_cfg.freq_idx - 1 : SUBGHZ_FREQ_PRESET_COUNT - 1;
 				subghz_apply_config();
+				subghz_prescan_rx_apply(); /* re-tune pre-scan RX to the new band */
 				m1_uiView_display_update(SUBGHZ_RECORD_DISPLAY_PARAM_READY);
 			} // if ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_READY )
 			else if ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_COMPLETE )
@@ -1285,6 +1451,7 @@ static int subghz_record_kp_handler(void)
 			{
 				subghz_cfg.freq_idx = (subghz_cfg.freq_idx + 1) % SUBGHZ_FREQ_PRESET_COUNT;
 				subghz_apply_config();
+				subghz_prescan_rx_apply(); /* re-tune pre-scan RX to the new band */
 				m1_uiView_display_update(SUBGHZ_RECORD_DISPLAY_PARAM_READY);
 			} // if ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_READY )
 		} // else if(this_button_status.event[BUTTON_RIGHT_KP_ID]==BUTTON_EVENT_CLICK )
@@ -1297,6 +1464,7 @@ static int subghz_record_kp_handler(void)
 					subghz_scan_config.band = SUB_GHZ_BAND_CUSTOM;
 					subghz_scan_config.modulation = (subghz_custom_freq_hz >= 850000000UL) ? MODULATION_FSK : MODULATION_OOK;
 				}
+				subghz_prescan_rx_apply(); /* re-tune pre-scan RX (keep custom band) */
 				m1_uiView_display_update(SUBGHZ_RECORD_DISPLAY_PARAM_READY);
 			}
 		} // else if(this_button_status.event[BUTTON_UP_KP_ID]==BUTTON_EVENT_CLICK )
@@ -1306,6 +1474,7 @@ static int subghz_record_kp_handler(void)
 			{
 				sub_ghz_config_screen();
 				subghz_apply_config();
+				subghz_prescan_rx_apply(); /* config screen may have moved the radio; re-assert RX */
 				m1_uiView_display_update(SUBGHZ_RECORD_DISPLAY_PARAM_READY);
 			}
 			else if ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_COMPLETE )
@@ -1463,7 +1632,7 @@ static void subghz_replay_browse_gui_update(uint8_t param)
 		{
 			double_buffer_ptr_id = 1; // Update raw samples buffer
 			m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_M, LED_FASTBLINK_ONTIME_M); // Turn on
-			m1_uiView_display_update(SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY);
+			m1_uiView_display_update(SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING);
 		} // if ( ret_code )
 		else
 		{
@@ -1538,6 +1707,28 @@ static void subghz_replay_play_gui_init(void)
 
 /*============================================================================*/
 /**
+  * @brief  Start one TX burst of the currently loaded signal.
+  *         Updates subghz_replay_ret_code. Caller handles LED and error UI.
+  * @param  None
+  * @retval true if the transmission started
+  */
+/*============================================================================*/
+static bool sub_ghz_replay_tx_burst_start(void)
+{
+	sub_ghz_set_opmode(SUB_GHZ_OPMODE_TX, subghz_replay_band, subghz_replay_channel,
+	                   tx_power_values[subghz_tx_power_idx]);
+	subghz_replay_ret_code = sub_ghz_raw_replay_init();
+	if ( subghz_replay_ret_code==1 )
+		return false;
+
+	double_buffer_ptr_id = 1;
+	subghz_decenc_ctl.ntx_raw_repeat = SUBGHZ_TX_RAW_REPLAY_REPEAT_DEFAULT;
+	return true;
+} // static bool sub_ghz_replay_tx_burst_start(void)
+
+
+/*============================================================================*/
+/**
   * @brief
   * @param
   * @retval
@@ -1591,8 +1782,17 @@ static void subghz_replay_play_gui_update(uint8_t param)
 			strcat(freq_text, "MHz ");
 			strcat(freq_text, subghz_modulation_text[subghz_replay_mod]);
 			strcpy(line1, freq_text);
-			strcpy(line2, "Replay ready");
-			strcpy(line3, "OK transmit  BACK return");
+			strcpy(line2, subghz_tx_repeat_mode ? "Mode: Repeat" : "Mode: Once");
+			strcpy(line3, "OK send  L/R mode");
+			break;
+
+		case SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING:
+			m1_float_to_string(freq_text, subghz_replay_freq, 3);
+			strcat(freq_text, "MHz ");
+			strcat(freq_text, subghz_modulation_text[subghz_replay_mod]);
+			strcpy(line1, freq_text);
+			strcpy(line2, subghz_tx_repeat_mode ? "Sending (repeat)" : "Sending...");
+			strcpy(line3, "BACK to stop");
 			break;
 
 		case SUBGHZ_REPLAY_DISPLAY_PARAM_SYS_ERROR:
@@ -1612,7 +1812,11 @@ static void subghz_replay_play_gui_update(uint8_t param)
 					  line3[0] ? line3 : NULL);
 	if (param == SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY)
 	{
-		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Replay", target_10x10);
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Back", "Send", target_10x10);
+	}
+	else if (param == SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING)
+	{
+		m1_draw_bottom_bar(&m1_u8g2, arrowleft_8x8, "Stop", "", NULL);
 	}
 	else
 	{
@@ -1650,7 +1854,13 @@ static int subghz_replay_play_gui_message(void)
 			subghz_replay_ret_code = sub_ghz_replay_continue(subghz_replay_ret_code);
 			if ( subghz_replay_ret_code==SUB_GHZ_RAW_DATA_PARSER_IDLE )
 			{
-				m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_OFF, LED_FASTBLINK_ONTIME_OFF); // Turn off
+				// Signal fully sent: loop again in Repeat mode, otherwise return to idle
+				if ( !subghz_tx_repeat_mode || !sub_ghz_replay_tx_burst_start() )
+				{
+					subghz_replay_ret_code = SUB_GHZ_RAW_DATA_PARSER_IDLE;
+					m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_OFF, LED_FASTBLINK_ONTIME_OFF); // Turn off
+					m1_uiView_display_update(SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY);
+				} // if ( !subghz_tx_repeat_mode || !sub_ghz_replay_tx_burst_start() )
 			} // if ( subghz_replay_ret_code==SUB_GHZ_RAW_DATA_PARSER_IDLE )
 		} // else if ( q_item.q_evt_type==Q_EVENT_SUBGHZ_TX )
 	} // if (ret==pdTRUE)
@@ -1690,14 +1900,11 @@ static int subghz_replay_play_kp_handler(void)
 			{
 				if ( subghz_replay_ret_code != SUB_GHZ_RAW_DATA_PARSER_IDLE ) // Do nothing if it's replaying
 					return 1;
-				sub_ghz_set_opmode(SUB_GHZ_OPMODE_TX, subghz_replay_band, subghz_replay_channel, tx_power_values[subghz_tx_power_idx]);
-				subghz_replay_ret_code = sub_ghz_raw_replay_init();
-				if ( subghz_replay_ret_code!=1 )
+				if ( sub_ghz_replay_tx_burst_start() )
 				{
-					double_buffer_ptr_id = 1;
-					subghz_decenc_ctl.ntx_raw_repeat = SUBGHZ_TX_RAW_REPLAY_REPEAT_DEFAULT;
 					m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_M, LED_FASTBLINK_ONTIME_M); // Turn on
-				} // if ( ret_code!=1 )
+					m1_uiView_display_update(SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING);
+				} // if ( sub_ghz_replay_tx_burst_start() )
 				else
 				{
 					sub_ghz_raw_tx_stop();
@@ -1708,6 +1915,12 @@ static int subghz_replay_play_kp_handler(void)
 				} // else
 			} // if ( subghz_uiview_gui_latest_param==SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY )
 		} // else if(this_button_status.event[BUTTON_OK_KP_ID]==BUTTON_EVENT_CLICK )
+		else if( this_button_status.event[BUTTON_LEFT_KP_ID]==BUTTON_EVENT_CLICK ||
+		         this_button_status.event[BUTTON_RIGHT_KP_ID]==BUTTON_EVENT_CLICK )	// Once <-> Repeat
+		{
+			subghz_tx_repeat_mode = !subghz_tx_repeat_mode;
+			m1_uiView_display_update(subghz_uiview_gui_latest_param);
+		} // else if( LEFT or RIGHT click )
 	} // if (ret==pdTRUE)
 
 	return 1;
@@ -2262,7 +2475,7 @@ uint8_t sub_ghz_replay_flipper_file(const char *sub_path)
 		double_buffer_ptr_id = 1;
 		m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_M,
 		                  LED_FASTBLINK_ONTIME_M);
-		subghz_replay_play_gui_update(SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY);
+		subghz_replay_play_gui_update(SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING);
 	}
 	else
 	{
@@ -2307,19 +2520,13 @@ uint8_t sub_ghz_replay_flipper_file(const char *sub_path)
 					/* Replay again */
 					if (subghz_replay_ret_code == SUB_GHZ_RAW_DATA_PARSER_IDLE)
 					{
-						sub_ghz_set_opmode(SUB_GHZ_OPMODE_TX,
-						                   subghz_replay_band,
-						                   subghz_replay_channel,
-						                   tx_power_values[subghz_tx_power_idx]);
-						subghz_replay_ret_code = sub_ghz_raw_replay_init();
-						if (subghz_replay_ret_code != 1)
+						if (sub_ghz_replay_tx_burst_start())
 						{
-							double_buffer_ptr_id = 1;
-							subghz_decenc_ctl.ntx_raw_repeat =
-							    SUBGHZ_TX_RAW_REPLAY_REPEAT_DEFAULT;
 							m1_led_fast_blink(LED_BLINK_ON_RGB,
 							                  LED_FASTBLINK_PWM_M,
 							                  LED_FASTBLINK_ONTIME_M);
+							subghz_replay_play_gui_update(
+							    SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING);
 						}
 						else
 						{
@@ -2332,6 +2539,14 @@ uint8_t sub_ghz_replay_flipper_file(const char *sub_path)
 						}
 					}
 				}
+				else if (btn.event[BUTTON_LEFT_KP_ID] == BUTTON_EVENT_CLICK ||
+				         btn.event[BUTTON_RIGHT_KP_ID] == BUTTON_EVENT_CLICK)
+				{
+					/* Toggle Once <-> Repeat; takes effect on the next
+					 * end-of-signal, so it can also stop an ongoing loop */
+					subghz_tx_repeat_mode = !subghz_tx_repeat_mode;
+					subghz_replay_play_gui_update(subghz_uiview_gui_latest_param);
+				}
 			}
 			else if (q_item.q_evt_type == Q_EVENT_SUBGHZ_TX)
 			{
@@ -2340,25 +2555,15 @@ uint8_t sub_ghz_replay_flipper_file(const char *sub_path)
 				    sub_ghz_replay_continue(subghz_replay_ret_code);
 				if (subghz_replay_ret_code == SUB_GHZ_RAW_DATA_PARSER_IDLE)
 				{
-					/* Auto-restart: loop continuously until BACK */
-					sub_ghz_set_opmode(SUB_GHZ_OPMODE_TX,
-					                   subghz_replay_band,
-					                   subghz_replay_channel,
-					                   tx_power_values[subghz_tx_power_idx]);
-					subghz_replay_ret_code = sub_ghz_raw_replay_init();
-					if (subghz_replay_ret_code != 1)
+					/* Repeat mode: loop until BACK. Once mode: stop here. */
+					if (!subghz_tx_repeat_mode || !sub_ghz_replay_tx_burst_start())
 					{
-						double_buffer_ptr_id = 1;
-						subghz_decenc_ctl.ntx_raw_repeat =
-						    SUBGHZ_TX_RAW_REPLAY_REPEAT_DEFAULT;
-					}
-					else
-					{
-						/* Restart failed — stop */
+						subghz_replay_ret_code = SUB_GHZ_RAW_DATA_PARSER_IDLE;
 						m1_led_fast_blink(LED_BLINK_ON_RGB,
 						                  LED_FASTBLINK_PWM_OFF,
 						                  LED_FASTBLINK_ONTIME_OFF);
-						subghz_replay_ret_code = SUB_GHZ_RAW_DATA_PARSER_IDLE;
+						subghz_replay_play_gui_update(
+						    SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY);
 					}
 				}
 			}
@@ -2824,7 +3029,7 @@ static void sub_ghz_saved_action_menu(const char *filepath, const char *filename
 						{
 							double_buffer_ptr_id = 1;
 							m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_M, LED_FASTBLINK_ONTIME_M);
-							subghz_replay_play_gui_update(SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY);
+							subghz_replay_play_gui_update(SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING);
 						}
 						else
 						{
@@ -2857,15 +3062,10 @@ static void sub_ghz_saved_action_menu(const char *filepath, const char *filename
 									{
 										if (subghz_replay_ret_code == SUB_GHZ_RAW_DATA_PARSER_IDLE)
 										{
-											sub_ghz_set_opmode(SUB_GHZ_OPMODE_TX,
-											    subghz_replay_band, subghz_replay_channel,
-											    tx_power_values[subghz_tx_power_idx]);
-											subghz_replay_ret_code = sub_ghz_raw_replay_init();
-											if (subghz_replay_ret_code != 1)
+											if (sub_ghz_replay_tx_burst_start())
 											{
-												double_buffer_ptr_id = 1;
-												subghz_decenc_ctl.ntx_raw_repeat = SUBGHZ_TX_RAW_REPLAY_REPEAT_DEFAULT;
 												m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_M, LED_FASTBLINK_ONTIME_M);
+												subghz_replay_play_gui_update(SUBGHZ_REPLAY_DISPLAY_PARAM_SENDING);
 											}
 											else
 											{
@@ -2876,26 +3076,25 @@ static void sub_ghz_saved_action_menu(const char *filepath, const char *filename
 											}
 										}
 									}
+									else if (btn.event[BUTTON_LEFT_KP_ID] == BUTTON_EVENT_CLICK ||
+									         btn.event[BUTTON_RIGHT_KP_ID] == BUTTON_EVENT_CLICK)
+									{
+										/* Toggle Once <-> Repeat */
+										subghz_tx_repeat_mode = !subghz_tx_repeat_mode;
+										subghz_replay_play_gui_update(subghz_uiview_gui_latest_param);
+									}
 								}
 								else if (q_item.q_evt_type == Q_EVENT_SUBGHZ_TX)
 								{
 									subghz_replay_ret_code = sub_ghz_replay_continue(subghz_replay_ret_code);
 									if (subghz_replay_ret_code == SUB_GHZ_RAW_DATA_PARSER_IDLE)
 									{
-										/* Auto-restart: loop until BACK */
-										sub_ghz_set_opmode(SUB_GHZ_OPMODE_TX,
-										    subghz_replay_band, subghz_replay_channel,
-										    tx_power_values[subghz_tx_power_idx]);
-										subghz_replay_ret_code = sub_ghz_raw_replay_init();
-										if (subghz_replay_ret_code != 1)
+										/* Repeat mode: loop until BACK. Once mode: stop here. */
+										if (!subghz_tx_repeat_mode || !sub_ghz_replay_tx_burst_start())
 										{
-											double_buffer_ptr_id = 1;
-											subghz_decenc_ctl.ntx_raw_repeat = SUBGHZ_TX_RAW_REPLAY_REPEAT_DEFAULT;
-										}
-										else
-										{
-											m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_OFF, LED_FASTBLINK_ONTIME_OFF);
 											subghz_replay_ret_code = SUB_GHZ_RAW_DATA_PARSER_IDLE;
+											m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_OFF, LED_FASTBLINK_ONTIME_OFF);
+											subghz_replay_play_gui_update(SUBGHZ_REPLAY_DISPLAY_PARAM_PLAY);
 										}
 									}
 								}
