@@ -36,6 +36,20 @@
 
 #define SUBGHZ_RAW_DATA_SAMPLES_MAX			64000 // data type of sample: uint16_t
 
+/* Heap parked by the record view so the sample buffers cannot eat the memory
+ * the SD card manager and the replay parser need later.
+ *
+ * The newlib heap is only ~100 KB, and both sample buffers are allocated with
+ * a "halve until it fits" loop, so they take everything that is free at the
+ * moment they run. The SD manager needs a contiguous
+ * M1_SDM_MIN_BUFFER_SIZE*M1_SDM_BUFFER_ARRAY_SIZE (28 KB) block when a
+ * recording starts; without a reservation that block only fits by luck, and a
+ * replay in between reliably breaks it (replay allocates its own greedy buffer
+ * plus a 4 KB file buffer). The failure surfaced as "SD card access error" on
+ * the record screen, i.e. record-once-then-fail.
+ * Sized for the SD write buffer plus the replay buffers (28 KB + 20 KB). */
+#define SUBGHZ_HEAP_RESERVE_SIZE			(49152U)
+
 #define SUBGHZ_TX_RAW_REPLAY_REPEAT_DEFAULT		4 // number of additional replays after the first transmit
 
 #define SI4463_nIRQ_EXTI_IRQn         	EXTI12_IRQn
@@ -426,6 +440,11 @@ static float subghz_replay_freq;
 static bool subghz_tx_repeat_mode = false;
 static S_M1_file_info *f_info = NULL;
 static S_M1_SDM_DatFileInfo_t datfile_info;
+/* Parked heap block, see SUBGHZ_HEAP_RESERVE_SIZE. Only the record view holds
+ * it; subghz_reserve_owned gates the re-take so the replay browser, which
+ * shares sub_ghz_raw_samples_init/deinit(), never starts parking memory. */
+static void *subghz_heap_reserve = NULL;
+static bool subghz_reserve_owned = false;
 S_M1_Q_Union_t *subghz_rx_q = NULL;
 S_M1_SubGHz_Scan_Config subghz_scan_config =
 {
@@ -475,6 +494,8 @@ static void sub_ghz_rx_init(void);
 static void sub_ghz_rx_start(void);
 static void sub_ghz_rx_pause(void);
 static void sub_ghz_rx_deinit(void);
+static void subghz_reserve_hold(void);
+static void subghz_reserve_release(void);
 static uint8_t sub_ghz_ring_buffers_init(void);
 static void sub_ghz_ring_buffers_deinit(void);
 static uint8_t sub_ghz_rx_raw_save(bool header_init, bool last_data);
@@ -870,6 +891,10 @@ void sub_ghz_record(void)
 	bool sys_ready;
 	uint8_t param = SUBGHZ_RECORD_DISPLAY_PARAM_READY;
 
+	/* Park the SD/replay heap before the capture buffers grab what is free. */
+	subghz_reserve_owned = true;
+	subghz_reserve_hold();
+
 	sys_ready = !sub_ghz_ring_buffers_init();
 	if ( !sys_ready )
 		param = SUBGHZ_RECORD_DISPLAY_PARAM_MEM_ERROR;
@@ -895,6 +920,10 @@ void sub_ghz_record(void)
 	{
 		;
 	}
+
+	/* Give the parked block back to the rest of the system on the way out. */
+	subghz_reserve_owned = false;
+	subghz_reserve_release();
 } // void sub_ghz_record(void)
 
 
@@ -1041,7 +1070,16 @@ static void subghz_record_gui_update(uint8_t param)
 
 		case SUBGHZ_RECORD_DISPLAY_PARAM_MEM_ERROR:
 			strcpy(line1, "Memory error!");
-			strcpy(line2, "BACK to exit");
+			strcpy(line2, "Not enough RAM");
+			if ( subghz_uiview_gui_latest_param!=0xFF ) // Raised from a live screen?
+			{
+				strcpy(line3, "BACK to exit, OK retry");
+				next_param = subghz_uiview_gui_latest_param; // Keep the screen usable
+			}
+			else
+			{
+				strcpy(line3, "BACK to exit");
+			}
 			break;
 
 		case SUBGHZ_RECORD_DISPLAY_PARAM_SDCARD_ERROR:
@@ -1302,6 +1340,9 @@ static int subghz_record_kp_handler(void)
 				} // if ( !last_data_saved )
 				m1_sdm_task_stop(); // Stop sampling raw data and flush data to SD card
 				m1_sdm_task_deinit();
+				/* Its write buffer is freed: park that space again so a replay
+				 * cannot take it before the next recording needs it. */
+				subghz_reserve_hold();
 				sub_ghz_set_opmode(SUB_GHZ_OPMODE_ISOLATED, subghz_scan_config.band, 0, 0);
 
 				m1_uiView_display_update(SUBGHZ_RECORD_DISPLAY_PARAM_COMPLETE);
@@ -1344,6 +1385,8 @@ static int subghz_record_kp_handler(void)
 				infix[3] = '\0';
 				datfile_info.file_infix = infix;
 				datfile_info.file_suffix = subghz_mod_presets[subghz_cfg.mod_idx].label;
+				/* Hand the parked block to the SD manager's write buffer. */
+				subghz_reserve_release();
 				ret = m1_sdm_file_init(&datfile_info);
 				if ( !ret )
 				{
@@ -1373,7 +1416,12 @@ static int subghz_record_kp_handler(void)
 				} // if ( !ret )
 				else
 				{
-					m1_uiView_display_update(SUBGHZ_RECORD_DISPLAY_PARAM_SDCARD_ERROR);
+					/* Nothing was allocated, so take the block back. ret==2 is
+					 * the SD write buffer allocation failing — a RAM problem,
+					 * not a card problem, so say so instead of blaming the card. */
+					subghz_reserve_hold();
+					m1_uiView_display_update((ret==2)?SUBGHZ_RECORD_DISPLAY_PARAM_MEM_ERROR
+					                                :SUBGHZ_RECORD_DISPLAY_PARAM_SDCARD_ERROR);
 				} // else
 			} // if ( nfc_uiview_gui_latest_param==NFC_READ_DISPLAY_PARAM_READING_COMPLETE )
 			else if ( subghz_uiview_gui_latest_param==SUBGHZ_RECORD_DISPLAY_PARAM_ACTIVE )
@@ -1389,6 +1437,9 @@ static int subghz_record_kp_handler(void)
 				} // if ( !last_data_saved )
 				m1_sdm_task_stop(); // Stop sampling raw data and flush data to SD card
 				m1_sdm_task_deinit();
+				/* Its write buffer is freed: park that space again so a replay
+				 * cannot take it before the next recording needs it. */
+				subghz_reserve_hold();
 				sub_ghz_set_opmode(SUB_GHZ_OPMODE_ISOLATED, subghz_scan_config.band, 0, 0);
 
 				m1_uiView_display_update(SUBGHZ_RECORD_DISPLAY_PARAM_COMPLETE);
@@ -3954,6 +4005,44 @@ static void sub_ghz_rx_deinit(void)
 
 /*============================================================================*/
 /*
+  * @brief  Re-park the record view's heap reserve, see SUBGHZ_HEAP_RESERVE_SIZE.
+  *         No-op unless the record view owns it, and when the block cannot be
+  *         re-taken the code keeps working exactly as it did before.
+  * @param  None
+  * @retval None
+ */
+/*============================================================================*/
+static void subghz_reserve_hold(void)
+{
+	if ( !subghz_reserve_owned || subghz_heap_reserve )
+		return;
+
+	subghz_heap_reserve = malloc(SUBGHZ_HEAP_RESERVE_SIZE);
+	if ( subghz_heap_reserve==NULL )
+		M1_LOG_I(M1_LOGDB_TAG, "subghz reserve unavailable\r\n");
+} // static void subghz_reserve_hold(void)
+
+
+/*============================================================================*/
+/*
+  * @brief  Release the parked block right before the SD card manager or the
+  *         replay parser allocates, so their block lands in this exact hole.
+  * @param  None
+  * @retval None
+ */
+/*============================================================================*/
+static void subghz_reserve_release(void)
+{
+	if ( subghz_heap_reserve )
+	{
+		free(subghz_heap_reserve);
+		subghz_heap_reserve = NULL;
+	}
+} // static void subghz_reserve_release(void)
+
+
+/*============================================================================*/
+/*
   * @brief  Initialize ring buffers to receive RF data
   * @param  None
   * @retval 0 if success
@@ -4256,6 +4345,9 @@ static uint8_t sub_ghz_raw_samples_init(void)
 	uint8_t i, error, key_len, *token;
 	uint8_t *psdcard_dat_buffer = NULL;
 
+	/* Hand the parked block to the replay buffers allocated just below. */
+	subghz_reserve_release();
+
 	do
 	{
 		error = m1_sdm_get_logging_error();
@@ -4380,6 +4472,9 @@ static void sub_ghz_raw_samples_deinit(bool discard_samples)
 	m1_fb_close_file(&datfile_info.dat_file_hdl);
 	if (discard_samples)
 		m1_fb_delete_file(datfile_info.dat_filename);
+
+	/* Replay buffers are gone: park the block again for the next recording. */
+	subghz_reserve_hold();
 
 	M1_LOG_D(M1_LOGDB_TAG, "sub_ghz_raw_samples_deinit %d\r\n", subghz_back_buffer_size);
 } // static void sub_ghz_raw_samples_deinit(bool discard_samples)
