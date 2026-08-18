@@ -2226,7 +2226,7 @@ static void rpc_handle_esp_update_finish(const S_RPC_Frame *f)
  */
 static void rpc_handle_cli_exec(const S_RPC_Frame *f)
 {
-    static char cmd_buf[64];
+    static char cmd_buf[160];   /* room for full paths (e.g. espnow send <mac> <path>) */
     static char out_buf[RPC_MAX_PAYLOAD];
 
     if (f->len < 2)  /* At minimum: one char + null */

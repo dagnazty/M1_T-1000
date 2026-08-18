@@ -4,6 +4,166 @@ All notable changes to the M1 T-1000 firmware will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-16
+
+### Added
+- **ESP Link — remote trigger over ESP32 (ESP-NOW).** New top-level "ESP Link"
+  menu app: discover peers (HELLO), pair, set a shared passphrase, and remotely
+  trigger a peer over 2.4 GHz ESP-NOW. The actual payload is transferred
+  (AES-256 encrypted, per-fragment ACK'd) and the peer writes + runs it:
+  - **BadUSB** — DuckyScript is transferred, written to `0:/BadUSB`, and executed
+    (USB switches to HID). Verified end-to-end.
+  - **IR** — a single button is extracted from a `.ir` remote and transferred;
+    the peer plays that one signal from `0:/IR`. Verified end-to-end.
+  - Encrypted-only + pairing gates; a wrong/absent passphrase is dropped.
+  - CLI `espnow` (on/off/info/key/scan/pair/send/listen) and host tool
+    `tools/m1rpc.py`. Companion T-800 firmware provides the `AT+M1ESPNOW*` set.
+- Sub-GHz remote trigger is temporarily shelved from ESP Link (its replay runs a
+  blocking UI loop that doesn't fit the receive path yet).
+
+### Notes
+- Large payloads currently transfer at ~1.3 s/fragment; fine for typical scripts
+  and parsed IR. A per-fragment speed-up (SPI-AT return-on-OK) is the open item.
+
+## [0.3.11] - 2026-08-16
+
+### Added
+- **ESP-NOW link Phase 4: IR + Sub-GHz remote triggers.** The remote-trigger /
+  payload-transfer now handles `.ir` and `.sub` files alongside BadUSB. The
+  receiver routes by payload type — writes to `0:/IR` (`ir_universal_play_file`)
+  or `0:/SUBGHZ` (`sub_ghz_replay_flipper_file`) as well as `0:/BadUSB`
+  (`badusb_execute_file`). Sender: `espnow send` infers the type from the file
+  extension (`.sub`/`.ir`/else BadUSB); the on-device ESP Link app adds a
+  BadUSB / IR / Sub-GHz type picker before the file browser.
+
+## [0.3.10] - 2026-08-16
+
+### Changed
+- **ESP-NOW commands 3x faster (3s -> 1s each).** `spi_AT_send_recv` always
+  waits its full (whole-second) timeout for the custom `AT+M1ESPNOW*` commands
+  because the SPI-AT layer doesn't match their `OK` back to the caller; dropped
+  the per-command timeout from 3s to the 1s API minimum. A multi-fragment
+  payload transfer is now ~1s/fragment. (Sub-second would require fixing the
+  OK-terminator matching in the shared SPI-AT transport — deferred.)
+
+## [0.3.9] - 2026-08-16
+
+### Fixed
+- **ESP-NOW payload transfer: fragment size 160 -> 32 bytes.** A 160-byte chunk
+  made the `AT+M1ESPNOWSEND=...,"<hex>"` command ~375 chars, exceeding the
+  ESP-AT command-line length cap, so every fragment failed. Chunks are now 32
+  bytes (command stays well under the cap). The ESP trigger queue was deepened
+  (8 -> 32) and the M1 now drains it fully each poll, so the extra fragments
+  don't overflow. Requires the matching T-800 ESP firmware (`ENOW_FILE_CHUNK`).
+
+## [0.3.8] - 2026-08-15
+
+### Added
+- **`espnow send <mac> <name|path> [remotename]` CLI** — scriptable payload
+  transfer + run (mirrors the UI's Trigger BadUSB), so the whole flow can be
+  driven over RPC for testing. A bare name reads `0:/BadUSB/<name>`; a path with
+  `/` is used as-is; remote filename defaults to the basename.
+- RPC `CLI_EXEC` command buffer raised 64 → 160 bytes so full paths fit.
+
+## [0.3.7] - 2026-08-15
+
+### Added
+- **ESP-NOW remote trigger now sends the actual payload.** Previously only the
+  file *name* crossed the link (the peer had to already own the script). Now the
+  sender reads the DuckyScript, splits it into ≤160-byte fragments, and transfers
+  them (AES-encrypted, per-fragment ACK) via `AT+M1ESPNOWSEND`; the receiver
+  reassembles, writes `0:/BadUSB/<name>`, and runs it.
+
+### Fixed
+- **Received triggers never executed (no USB→HID switch).** Two causes: (1) the
+  async `+ESPNOWRX` URC was flushed by the SPI-AT response channel before the M1
+  polled it — replaced with a reliable, UID-matched `AT+M1ESPNOWRX?` query that
+  drains a queued-trigger buffer on the ESP; (2) running BadUSB from the RPC/CLI
+  task couldn't switch USB out from under its own CDC channel — the receiver now
+  runs from the **ESP Link → Listen** screen (main UI task), where the HID switch
+  works. `m1_esp_link_rx_poll()` reassembles + executes from that task.
+
+## [0.3.6] - 2026-08-15
+
+### Fixed
+- **ESP-NOW remote trigger never actually fired the BadUSB on the receiver.**
+  The trigger was delivered as an async `+ESPNOWRX` URC, but the SPI-AT response
+  channel flushes stale/unsolicited data before each command and only returns
+  UID-matched responses — so a one-shot trigger arriving between polls was
+  discarded and `badusb_execute_file()` was never called (no USB→HID switch,
+  "nothing happened"). Now the ESP **buffers** received triggers and the M1
+  **polls `AT+M1ESPNOWRX?`** (a UID-matched query) to drain them reliably.
+- **Trigger execution now runs in the UI/main task.** Added a **"Listen for
+  triggers"** mode to the ESP Link app; `badusb_execute_file()` runs there, so
+  the USB→HID switch works (the RPC CLI path can't switch USB out from under its
+  own CDC channel). `m1_esp_link_rx_poll()` exposes one poll+dispatch cycle.
+
+## [0.3.5] - 2026-08-15
+
+### Added
+- **ESP-NOW link Phase 3: on-device UI.** New "ESP Link" app under the Sub-GHz
+  menu (`m1_esp_link_app.c`): brings ESP-NOW up, scans for peers (HELLO), shows
+  a live peer list, and per peer offers **Trigger BadUSB** (browse `0:/BadUSB`,
+  pick a script, send it encrypted) and **Pair**. `[Set passphrase]` enters the
+  shared key via the on-screen keyboard; `[Rescan]` re-discovers. UI-facing
+  `m1_esp_link_*` helpers added (scan-collect, enable/key/pair/trigger returning
+  status).
+
+## [0.3.4] - 2026-08-15
+
+### Added
+- **ESP-NOW link Phase 1+2: encryption + discovery/pairing.**
+  - **App-layer AES-256-CBC** over the whole trigger payload, keyed by the
+    shared passphrase (SHA-256 KDF on the ESP; ESP-NOW link-layer encryption
+    stays off — no per-peer LMK pairing needed). A 2-byte plaintext magic
+    detects a wrong/absent key on decrypt.
+  - **Encrypted-only execution:** a keyed receiver drops unencrypted triggers,
+    and drops encrypted ones that fail to decrypt (wrong passphrase); the M1
+    additionally refuses to run any trigger reported as unencrypted.
+  - **Pairing allowlist:** `espnow pair <mac>` — once any peer is paired, only
+    listed MACs may trigger this unit. `espnow pair` (no arg) lists them.
+    Discovery via `espnow scan` (HELLO beacons → `+ESPNOWPEER`).
+  - New M1 CLI: `espnow pair`; `espnow key ''` now clears the key. Requires the
+    matching T-800 ESP firmware (`AT+M1ESPNOWPAIR`, AES payload).
+
+## [0.3.3] - 2026-08-15
+
+### Fixed
+- **ESP-NOW `espnow trig`/`key` sent unquoted string args, which the ESP32
+  rejected.** ESP-AT requires string parameters to be double-quoted (like
+  `AT+CWJAP="ssid","pass"`); the M1 sent the MAC and file name bare, so
+  `esp_at_get_para_as_str` failed and the ESP returned `ERROR` before ever
+  transmitting. Now quoted: `AT+M1ESPNOWTRIG="<mac>",<ptype>,"<name>"` and
+  `AT+M1ESPNOWKEY="<pass>"`. **Verified on hardware: A→B trigger now completes
+  the full DATA→ACK round-trip (`ack=1`) — Phase 0 transport gate passed.**
+
+## [0.3.2] - 2026-08-15
+
+### Fixed
+- **ESP-NOW `espnow trig` mangled its MAC/name arguments.** The CLI handler
+  passed the raw `FreeRTOS_CLIGetParameter` pointers (which are not
+  null-terminated at the token boundary) straight into the AT command, so the
+  MAC field swallowed the rest of the line and the ESP rejected the frame. The
+  `trig` and `key` handlers now copy each parameter out by its returned length.
+
+## [0.3.1] - 2026-08-15
+
+### Added
+- **M1 Link over ESP32 (ESP-NOW) — remote-trigger PoC (Phase 0 spike).** Second
+  transport for the remote-trigger feature already shipped over the Si4463
+  sub-GHz radio, now carried over the ESP32-C6's 2.4 GHz radio via ESP-NOW:
+  - New `espnow` CLI command (`on/off/info/key/scan/trig/listen`) and module
+    `m1_csrc/m1_esp_link.c`, driving the ESP's `AT+M1ESPNOW*` commands over SPI
+    and parsing the `+ESPNOWRX:` / `+ESPNOWPEER:` events.
+  - Receiver runs an inbound BADUSB trigger via `badusb_execute_file()`.
+  - Requires the companion T-800 (ESP32-C6) firmware with the `AT+M1ESPNOW*`
+    command family. Design: `esp32-at-monstatek-m1/docs/ESPNOW_LINK_DESIGN.md`.
+  - Host bring-up tool `tools/m1rpc.py` (binary-RPC CLI_EXEC client).
+  - Gated by `M1_APP_ESPNOW_LINK_ENABLE`.
+
+### Changed
+- Version bumped to **0.3.1**.
+
 ## [0.3.0] - 2026-08-12
 
 ### Added

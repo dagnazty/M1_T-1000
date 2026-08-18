@@ -34,6 +34,7 @@
 #include "m1_bt.h"
 #include "m1_802154.h"
 #include "m1_link.h"
+#include "m1_esp_link.h"
 #include "m1_esp32_hal.h"
 #include "esp_app_main.h"
 #include "m1_compile_cfg.h"
@@ -133,6 +134,14 @@ S_M1_Menu_t menu_Sub_GHz_AddManually =
 S_M1_Menu_t menu_Sub_GHz_M1Link =
 {
     "M1 Link", m1_link_app_run, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+#endif
+
+#ifdef M1_APP_ESPNOW_LINK_ENABLE
+/* Top-level Main Menu entry (promoted out of the Sub-GHz submenu). */
+S_M1_Menu_t menu_ESPLink =
+{
+    "ESP Link", m1_esp_link_app_run, NULL, NULL, 0, 0, menu_m1_icon_wifi, NULL, NULL
 };
 #endif
 

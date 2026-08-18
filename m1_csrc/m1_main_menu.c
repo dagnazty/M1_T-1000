@@ -31,6 +31,9 @@ extern S_M1_Menu_t menu_Infrared;
 extern S_M1_Menu_t menu_GPIO;
 extern S_M1_Menu_t menu_Wifi;
 extern S_M1_Menu_t menu_Bluetooth;
+#ifdef M1_APP_ESPNOW_LINK_ENABLE
+extern S_M1_Menu_t menu_ESPLink;
+#endif
 extern S_M1_Menu_t menu_Setting_Storage_About;
 extern S_M1_Menu_t menu_Setting_Storage_Explore;
 extern S_M1_Menu_t menu_Setting_Storage_Mount;
@@ -115,13 +118,22 @@ static S_M1_Menu_t menu_Power =
 #define ENT_APPS
 #endif
 
-#define MAIN_MENU_COUNT  (10 + OPT_BADUSB + OPT_GAMES + OPT_APPS)
+#ifdef M1_APP_ESPNOW_LINK_ENABLE
+#define OPT_ESPLINK 1
+#define ENT_ESPLINK &menu_ESPLink,
+#else
+#define OPT_ESPLINK 0
+#define ENT_ESPLINK
+#endif
+
+#define MAIN_MENU_COUNT  (10 + OPT_BADUSB + OPT_GAMES + OPT_APPS + OPT_ESPLINK)
 
 S_M1_Menu_t menu_Main =
 {
     "Main Menu", NULL, NULL, NULL, MAIN_MENU_COUNT, 0, NULL, NULL,
     {&menu_Sub_GHz, &menu_125KHz_RFID, &menu_NFC, &menu_Infrared, &menu_GPIO,
      &menu_Wifi, &menu_Bluetooth,
+     ENT_ESPLINK
      ENT_BADUSB
      ENT_GAMES
      ENT_APPS

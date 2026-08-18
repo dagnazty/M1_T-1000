@@ -36,6 +36,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "m1_log_debug.h"
 #include "m1_cli.h"
 #include "m1_link.h"
+#include "m1_compile_cfg.h"
+#ifdef M1_APP_ESPNOW_LINK_ENABLE
+#include "m1_esp_link.h"
+#endif
 
 #define MAX_INPUT_LENGTH 		64
 #define USING_VS_CODE_TERMINAL 	0
@@ -54,6 +58,10 @@ BaseType_t cmd_clearScreen_help(void);
 #ifdef M1_APP_LINK_ENABLE
 BaseType_t cmd_m1_link(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString, uint8_t num_of_params);
 BaseType_t cmd_m1_link_help(void);
+#endif
+#ifdef M1_APP_ESPNOW_LINK_ENABLE
+BaseType_t cmd_m1_espnow(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString, uint8_t num_of_params);
+BaseType_t cmd_m1_espnow_help(void);
 #endif
 void vRegisterCLICommands(void);
 void cliWrite(const char *str);
@@ -94,6 +102,23 @@ const CLI_Command_Definition_t xCommandList[] = {
                         "  link trigger <id> <sub|badusb|badbt|ir> <path>\r\n\r\n",
         .pxCommandInterpreter = cmd_m1_link, /* The function to run. */
         .pxCommandHelper = cmd_m1_link_help, /* Help for the function. */
+        .cExpectedNumberOfParameters = -1 /* variable parameters are expected. */
+    },
+#endif
+#ifdef M1_APP_ESPNOW_LINK_ENABLE
+    {
+        .pcCommand = "espnow", /* M1 Link over ESP32 (ESP-NOW) remote-trigger spike (Phase 0). */
+        .pcHelpString = "espnow:\r\n M1 Link over ESP-NOW. Usage:\r\n"
+                        "  espnow on [ch]        bring ESP-NOW up (channel 1-13, def 1)\r\n"
+                        "  espnow off            bring ESP-NOW down\r\n"
+                        "  espnow info           state: enabled, channel, own MAC, key\r\n"
+                        "  espnow key <pass>     set shared AES passphrase ('' clears)\r\n"
+                        "  espnow scan [s]       broadcast HELLO, list peers (def 3)\r\n"
+                        "  espnow pair [mac]     add paired peer (no arg = list)\r\n"
+                        "  espnow trig <mac> <badusb> <name>  send an ACK'd trigger\r\n"
+                        "  espnow listen [s]     run received BadUSB triggers (def 30)\r\n\r\n",
+        .pxCommandInterpreter = cmd_m1_espnow, /* The function to run. */
+        .pxCommandHelper = cmd_m1_espnow_help, /* Help for the function. */
         .cExpectedNumberOfParameters = -1 /* variable parameters are expected. */
     },
 #endif
@@ -368,6 +393,194 @@ BaseType_t cmd_m1_link_help(void)
     return pdFALSE;
 } // BaseType_t cmd_m1_link_help(void)
 #endif /* M1_APP_LINK_ENABLE */
+
+
+#ifdef M1_APP_ESPNOW_LINK_ENABLE
+/*============================================================================*/
+/*
+ * CLI command: M1 Link over ESP32 (ESP-NOW) remote-trigger spike (Phase 0)
+ *
+ * Two-device test (both M1s on USB):
+ *   Unit B:  espnow on 1     then  espnow listen 60
+ *   Unit A:  espnow on 1     then  espnow info   (read A/B MACs)
+ *   Unit A:  espnow trig <B_mac> badusb <name.txt>
+ *   -> B prints +ESPNOWRX and runs 0:/BadUSB/<name.txt>.
+ */
+/*============================================================================*/
+BaseType_t cmd_m1_espnow(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString, uint8_t num_of_params)
+{
+    const char *sub;
+    BaseType_t sub_len;
+
+    (void)xWriteBufferLen;
+    memset(pcWriteBuffer, 0x00, xWriteBufferLen);
+
+    if ( num_of_params == 0 )
+    {
+        cmd_m1_espnow_help();
+        return pdFALSE;
+    }
+
+    sub = FreeRTOS_CLIGetParameter(pcCommandString, 1, &sub_len);
+    if ( sub == NULL )
+    {
+        cmd_m1_espnow_help();
+        return pdFALSE;
+    }
+
+    if ( strncmp(sub, "on", sub_len) == 0 )
+    {
+        const char *p_ch = FreeRTOS_CLIGetParameter(pcCommandString, 2, &sub_len);
+        uint8_t ch = (p_ch != NULL) ? (uint8_t)strtol(p_ch, NULL, 10) : 1u;
+        m1_esp_link_enable(ch);
+    }
+    else if ( strncmp(sub, "off", sub_len) == 0 )
+    {
+        m1_esp_link_disable();
+    }
+    else if ( strncmp(sub, "info", sub_len) == 0 )
+    {
+        m1_esp_link_info();
+    }
+    else if ( strncmp(sub, "key", sub_len) == 0 )
+    {
+        BaseType_t l2;
+        const char *p = FreeRTOS_CLIGetParameter(pcCommandString, 2, &l2);
+        char key[64];
+        if ( p != NULL )
+        {
+            /* FreeRTOS_CLIGetParameter returns a pointer + length into the
+             * command line, NOT a null-terminated token — terminate it. */
+            size_t kl = ((size_t)l2 < sizeof(key)) ? (size_t)l2 : sizeof(key) - 1;
+            memcpy(key, p, kl);
+            key[kl] = '\0';
+        }
+        m1_esp_link_key(p != NULL ? key : NULL);
+    }
+    else if ( strncmp(sub, "scan", sub_len) == 0 )
+    {
+        const char *p_s = FreeRTOS_CLIGetParameter(pcCommandString, 2, &sub_len);
+        uint32_t s = (p_s != NULL) ? (uint32_t)strtol(p_s, NULL, 10) : 3u;
+        m1_esp_link_scan(s);
+    }
+    else if ( strncmp(sub, "pair", sub_len) == 0 )
+    {
+        BaseType_t l2;
+        const char *p_mac = FreeRTOS_CLIGetParameter(pcCommandString, 2, &l2);
+        if ( p_mac == NULL ) m1_esp_link_pairs();   /* no arg = list */
+        else                 m1_esp_link_pair(p_mac);
+    }
+    else if ( strncmp(sub, "trig", sub_len) == 0 )
+    {
+        BaseType_t l2, l3, l4;
+        const char *p_mac  = FreeRTOS_CLIGetParameter(pcCommandString, 2, &l2);
+        const char *p_type = FreeRTOS_CLIGetParameter(pcCommandString, 3, &l3);
+        const char *p_name = FreeRTOS_CLIGetParameter(pcCommandString, 4, &l4);
+        if ( p_mac == NULL || p_type == NULL || p_name == NULL )
+        {
+            printf("usage: espnow trig <mac> <badusb> <name>\r\n");
+        }
+        else
+        {
+            /* FreeRTOS_CLIGetParameter returns a pointer + length into the
+             * command line, NOT a null-terminated token — copy each out. */
+            char mac[18], name[64];
+            size_t ml = ((size_t)l2 < sizeof(mac))  ? (size_t)l2 : sizeof(mac)  - 1;
+            size_t nl = ((size_t)l4 < sizeof(name)) ? (size_t)l4 : sizeof(name) - 1;
+            memcpy(mac,  p_mac,  ml); mac[ml]  = '\0';
+            memcpy(name, p_name, nl); name[nl] = '\0';
+
+            uint8_t ty = M1_ESPNOW_PTYPE_BADUSB;
+            if      ( strncmp(p_type, "sub",    l3) == 0 ) ty = M1_ESPNOW_PTYPE_SUB;
+            else if ( strncmp(p_type, "ir",     l3) == 0 ) ty = M1_ESPNOW_PTYPE_IR;
+            else if ( strncmp(p_type, "badusb", l3) == 0 ) ty = M1_ESPNOW_PTYPE_BADUSB;
+            m1_esp_link_trigger(mac, ty, name);
+        }
+    }
+    else if ( strncmp(sub, "send", sub_len) == 0 )
+    {
+        BaseType_t l2, l3, l4;
+        const char *p_mac  = FreeRTOS_CLIGetParameter(pcCommandString, 2, &l2);
+        const char *p_file = FreeRTOS_CLIGetParameter(pcCommandString, 3, &l3);
+        const char *p_name = FreeRTOS_CLIGetParameter(pcCommandString, 4, &l4); /* optional */
+        if ( p_mac == NULL || p_file == NULL )
+        {
+            printf("usage: espnow send <mac> <name|path> [remotename]\r\n");
+        }
+        else
+        {
+            char mac[18], file[64], path[128], name[64];
+            size_t ml = ((size_t)l2 < sizeof(mac))  ? (size_t)l2 : sizeof(mac)  - 1;
+            size_t fl = ((size_t)l3 < sizeof(file)) ? (size_t)l3 : sizeof(file) - 1;
+            memcpy(mac,  p_mac,  ml); mac[ml]  = '\0';
+            memcpy(file, p_file, fl); file[fl] = '\0';
+
+            /* Infer payload type from the extension: .sub -> Sub-GHz, .ir -> IR,
+             * otherwise BadUSB. A bare name is read from that type's folder; a
+             * path with '/' is used as-is. */
+            uint8_t ty; const char *dir;
+            size_t  flen = strlen(file);
+            if ( flen >= 4 && strcmp(file + flen - 4, ".sub") == 0 )
+                { ty = M1_ESPNOW_PTYPE_SUB;    dir = "0:/SUBGHZ"; }
+            else if ( flen >= 3 && strcmp(file + flen - 3, ".ir") == 0 )
+                { ty = M1_ESPNOW_PTYPE_IR;     dir = "0:/IR"; }
+            else
+                { ty = M1_ESPNOW_PTYPE_BADUSB; dir = "0:/BadUSB"; }
+
+            if ( strchr(file, '/') ) snprintf(path, sizeof(path), "%s", file);
+            else                     snprintf(path, sizeof(path), "%s/%s", dir, file);
+
+            if ( p_name )
+            {
+                size_t nl = ((size_t)l4 < sizeof(name)) ? (size_t)l4 : sizeof(name) - 1;
+                memcpy(name, p_name, nl); name[nl] = '\0';
+            }
+            else
+            {
+                const char *base = strrchr(path, '/');
+                base = base ? base + 1 : path;
+                strncpy(name, base, sizeof(name) - 1); name[sizeof(name) - 1] = '\0';
+            }
+            bool ok = m1_esp_link_send_file_ok(mac, ty, path, name);
+            printf("ESP-NOW: send %s -> %s\r\n", name, ok ? "OK" : "FAILED");
+        }
+    }
+    else if ( strncmp(sub, "listen", sub_len) == 0 )
+    {
+        const char *p_s = FreeRTOS_CLIGetParameter(pcCommandString, 2, &sub_len);
+        uint32_t s = (p_s != NULL) ? (uint32_t)strtol(p_s, NULL, 10) : 30u;
+        m1_esp_link_listen(s);
+    }
+    else
+    {
+        cmd_m1_espnow_help();
+    }
+
+    return pdFALSE;
+} // BaseType_t cmd_m1_espnow(...)
+
+
+/*============================================================================*/
+/*
+ * Help for the CLI command: M1 Link over ESP-NOW
+ */
+/*============================================================================*/
+BaseType_t cmd_m1_espnow_help(void)
+{
+    printf("\r\nM1 Link over ESP-NOW (Phase 0 spike) — 2.4 GHz remote trigger\r\n");
+    printf("  espnow on [ch]        bring ESP-NOW up (channel 1-13, default 1)\r\n");
+    printf("  espnow off            bring ESP-NOW down\r\n");
+    printf("  espnow info           state: enabled, channel, own MAC, key-set\r\n");
+    printf("  espnow key <pass>     set shared AES passphrase ('' clears)\r\n");
+    printf("  espnow scan [s]       broadcast HELLO, list peers (default 3)\r\n");
+    printf("  espnow pair [mac]     add paired peer (no arg = list paired)\r\n");
+    printf("  espnow trig <mac> <badusb> <name>  trigger an EXISTING file on a peer\r\n");
+    printf("  espnow send <mac> <name|path> [rn]  transfer a payload + run it\r\n");
+    printf("  espnow listen [s]     receive: reassemble + run triggers (default 30)\r\n");
+    printf("Encrypted-only: set same 'key' + 'pair' on both; wrong/no key is dropped.\r\n\r\n");
+    return pdFALSE;
+} // BaseType_t cmd_m1_espnow_help(void)
+#endif /* M1_APP_ESPNOW_LINK_ENABLE */
 
 
 

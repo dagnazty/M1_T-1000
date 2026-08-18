@@ -84,5 +84,6 @@ extern void assert_failed();
 #define M1_APP_GAMES_ENABLE            /* Enable built-in Games menu */
 #define M1_APP_APPS_ENABLE             /* Enable Apps menu (ELF loader from SD card) */
 #define M1_APP_LINK_ENABLE             /* Enable M1 Link device-to-device sub-GHz FSK link (Phase 0 spike) */
+#define M1_APP_ESPNOW_LINK_ENABLE      /* Enable M1 Link over ESP32 (ESP-NOW) remote-trigger PoC (Phase 0 spike) */
 
 #endif /* M1_COMPILE_CFG_H_ */
