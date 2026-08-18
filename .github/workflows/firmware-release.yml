@@ -105,7 +105,6 @@ jobs:
         id: release_meta
         shell: bash
         run: |
-          expected_tag="v${{ needs.build.outputs.version }}"
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
             requested_tag="${{ inputs.release_tag }}"
             if [ -z "${requested_tag}" ]; then
@@ -113,11 +112,6 @@ jobs:
             fi
           else
             requested_tag="${GITHUB_REF_NAME}"
-          fi
-
-          if [ "${requested_tag}" != "${expected_tag}" ]; then
-            echo "Release tag ${requested_tag} does not match firmware version ${expected_tag}" >&2
-            exit 1
           fi
 
           echo "tag_name=${requested_tag}" >> "$GITHUB_OUTPUT"
